@@ -133,3 +133,60 @@ def test_asking_without_a_password_does_not_lock_the_gate(gated):
         assert gated.get("/api/runs").status_code == 401
     ok = gated.post("/api/access", headers={"X-Demo-Password": "s3cret"})
     assert ok.status_code == 200
+
+
+def test_the_statistics_are_computed_once_per_version_of_the_answers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from ai_share_of_voice.api import server
+
+    run_dir = tmp_path / "run-20260101-000000-abc123"
+    run_dir.mkdir()
+    answers = run_dir / "answers.csv"
+    answers.write_text("a", encoding="utf-8")
+    calls = []
+
+    def fake_run_stats(data, runs_dir):
+        calls.append(data.metric)
+        row = SimpleNamespace(brand="Glovo", estimate=0.5, ci_low=0.4, ci_high=0.6, ci_method="x")
+        return SimpleNamespace(rows=(row,), n_questions=10)
+
+    monkeypatch.setattr(server, "run_stats", fake_run_stats)
+    server._compute_metric.cache_clear()
+
+    first = server._metric(tmp_path, run_dir.name, "mention_rate")
+    again = server._metric(tmp_path, run_dir.name, "mention_rate")
+    assert (
+        first
+        == again
+        == ({"Glovo": {"estimate": 0.5, "ci_low": 0.4, "ci_high": 0.6, "method": "x"}}, 10)
+    )
+    assert calls == ["mention_rate"]
+
+    answers.write_text("a longer file after a new round", encoding="utf-8")
+    server._metric(tmp_path, run_dir.name, "mention_rate")
+    assert calls == ["mention_rate", "mention_rate"]  # the file changed: computed again
+
+    assert server._metric(tmp_path, "run-missing", "mention_rate") == ({}, 0)
+
+
+@pytest.mark.parametrize(
+    ("cell", "expected"),
+    [("0.25", 0.25), ("", None), (None, None), ("n/a", None), ("nan", None), ("0", 0.0)],
+)
+def test_a_csv_cell_is_a_number_or_unknown_never_an_invented_zero(cell, expected):
+    from ai_share_of_voice.api.server import _number
+
+    assert _number(cell) == expected
+
+
+def test_too_many_requests_get_429(tmp_path, monkeypatch):
+    from ai_share_of_voice.api import server
+
+    monkeypatch.setenv("LLM_MODE", "simulated")
+    monkeypatch.setattr(server, "RATE_LIMIT", (3, 60.0))
+    settings = load_settings()
+    controller = RunController(settings, runs_dir=tmp_path, data_dir=Path("data"))
+    limited = TestClient(create_app(settings, controller))
+    codes = [limited.get("/api/meta").status_code for _ in range(5)]
+    assert codes == [200, 200, 200, 429, 429]

@@ -92,3 +92,21 @@ def test_beating_a_rival_is_a_who_wins_question():
         {"estimate": 0.5, "ci_low": 0.3, "ci_high": 0.7},
     )
     assert "no puedo decir que gane" in answer_question("¿Le gano a Just Eat?", f, "es")
+
+
+def test_the_model_reading_is_completed_by_the_rules():
+    from ai_share_of_voice.api.concierge import BriefDraft, llm_brief
+
+    class Agent:
+        def complete(self, prompt, schema):
+            assert "Glovo" in prompt
+            return BriefDraft(brand="Glovo", sector="", city="", competitors=["Just Eat"]), None
+
+    draft = llm_brief(
+        Agent(), "Glovo frente a Just Eat y Uber Eats en Madrid, comida a domicilio", "es"
+    )
+
+    assert draft.brand == "Glovo"
+    assert draft.city == "Madrid" and draft.sector == "Comida a domicilio"
+    assert draft.competitors == ["Just Eat", "Uber Eats"]  # fewer than two: the rules' list
+    assert draft.missing == []
