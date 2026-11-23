@@ -22,6 +22,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
+from ai_share_of_voice.agents.crew import agent_complete
 from ai_share_of_voice.errors import ToolFailure
 from ai_share_of_voice.schemas.brief import Brief, normalize_brand_name
 from ai_share_of_voice.schemas.llm import ModelClient
@@ -106,7 +107,9 @@ def generate_panel(
         if missing == 0:
             break
         try:
-            drafts, _usage = client.complete(build_prompt(brief, missing), DraftQuestions)
+            drafts, _usage, _route = agent_complete(
+                "question_generator", client, build_prompt(brief, missing), DraftQuestions
+            )
         except (ValueError, ValidationError):
             continue  # an invalid answer: the second call may still work
         accepted += _accept(drafts, brief, seen, missing)
