@@ -1,216 +1,217 @@
 # AI Share of Voice
 
-Measures how often a brand appears and is recommended against its competitors in an AI assistant's answers, and doubts its own results before delivering them.
+Measure how often an AI assistant mentions and recommends your brand compared with its
+competitors, with confidence intervals, traceable answers and a report reviewed before approval.
 
-Project III, Module V (AI Engineering) — AgentSquad: multi-agent system with CrewAI, LangGraph and MCP.
+Project III, Module V (AI Engineering) — AgentSquad: multi-agent system with CrewAI,
+LangGraph and MCP.
 
-> Every result is a dated sample. It is never presented as market share, and no causality is claimed between a web source and a recommendation.
+> Every result is a dated sample of one model and one question panel. It is never presented
+> as market share, and no causality is claimed between a web source and a recommendation.
 
-## Status
+## Current status
 
-C1 shared contracts and the A1 LangGraph skeleton are implemented; the graph still uses simulated nodes for several steps. D1 metrics and intervals, the D2 stopping policy, and the D3 statistics tool and chart functions exist at module level, but the real stopping policy and statistics calculations are not yet wired into the end-to-end graph/report path. Supporting modules for mention extraction, agent specifications, failure handling, and reporting are also present, but they are not all connected to a real end-to-end run.
+The `feat/ai-share-of-voice-app` branch includes a working local Gradio application in Spanish and
+English, with a simulated demo and a live measurement path. It supports question review,
+batched sampling, deterministic statistics, business discovery, web research through MCP,
+optional chart vision, report drafting, skeptic review and human approval.
 
-Checkpointing is configurable. A persistent checkpointer is needed to resume a human pause across process restarts. See [`docs/architecture.md`](docs/architecture.md) for module-level status and [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md) for phases, owners and tasks.
+Results include brand comparisons, answer examples, downloadable artifacts and trends across
+past measurements. The UI stores checkpoints in SQLite so saved measurements can be reopened.
+Live runs remain subject to provider quotas and the configured budget; a full-capacity live
+validation is still pending. See the [local integration spec](specs/local-integration.md)
+for implementation notes and open work, and the [project plan](docs/PROJECT_PLAN.md) for
+the wider roadmap.
 
+## Quick start: free demo
 
-## Installation
+**Requirements:** Git and Python 3.12 or 3.13 (`pyproject.toml` requires `>=3.12,<3.14`).
+Run the commands from the repository root. No API key is needed for the simulated demo.
 
-These steps install the project and check that it works. They assume a machine with nothing
-installed; if a step fails, see [Troubleshooting](#troubleshooting).
-
-### Requirements
-
-- **Python 3.12 or 3.13.** Python 3.14 is not supported yet because CrewAI does not support it, and
-  the project refuses to install on it.
-- **Git.**
-- `make` is optional: every step below has a direct command. GitHub CLI (`gh`) is only needed to work
-  with issues and pull requests.
-
-Check which Python versions you have:
+### Windows (PowerShell)
 
 ```powershell
-py -0p                      # Windows: lists every installed version
+git clone https://github.com/JCRbit/ai-share-of-voice.git
+cd ai-share-of-voice
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+Copy-Item .env.example .env
+.\.venv\Scripts\python.exe app.py --simulated
 ```
 
-```bash
-python3.12 --version        # macOS / Linux
-```
+These commands use the environment's Python directly, so activation is optional.
+For an existing checkout, skip cloning; copy `.env.example` only if `.env` does not exist.
 
-### 1. Get the code
+### Linux / macOS
 
 ```bash
 git clone https://github.com/JCRbit/ai-share-of-voice.git
 cd ai-share-of-voice
-```
-
-### 2. Create the virtual environment
-
-Windows (PowerShell):
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-macOS / Linux:
-
-```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-```
-
-The prompt now starts with `(.venv)`. Check the version inside the environment:
-
-```bash
-python --version            # must say 3.12.x or 3.13.x
-```
-
-### 3. Install the dependencies
-
-```bash
-pip install -r requirements-dev.txt
-pip install -e .
-pip check                   # must say: No broken requirements found.
-```
-
-The first install takes several minutes because CrewAI brings many packages. `pip install -e .`
-makes the `ai_share_of_voice` package importable, which `mock_run.py` needs. On macOS, Linux or
-any system with `make`, `make install` runs the first command only, so still run `pip install -e .`.
-
-### 4. Create your configuration file
-
-Windows (PowerShell):
-
-```powershell
-Copy-Item .env.example .env
-```
-
-macOS / Linux:
-
-```bash
+python -m pip install -r requirements-dev.txt
 cp .env.example .env
+python app.py --simulated
 ```
 
-Leave `LLM_MODE=simulated`. In that mode no API key is needed and nothing is spent. When the team
-enables the live mode, your own key and your own spending cap go in `.env`; see the variables listed in
-`.env.example`. **Never commit `.env`**; Git already ignores it.
+Open the address printed in the terminal, normally `http://127.0.0.1:7860`.
+`--simulated` forces simulated model responses and fixture-only research for that process,
+even if `.env` is configured for live runs. Demo figures illustrate the workflow; they are
+not measurements of a real AI provider.
 
-### 5. Install the Git hooks (only if you will contribute)
+## Run a measurement in the app
 
-```bash
-pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
-```
+1. Enter a brand, **two to five competitors**, sector and location. Choose the language,
+   question count, round limit and precision target.
+2. Prepare and review the questions. Edit the panel before starting; questions naming tracked
+   brands are rejected. The included demo panels concern food delivery in Madrid.
+3. Start the measurement and follow its activity. Sampling stops according to precision,
+   marginal return, available budget or the round limit.
+4. Read the draft and the skeptic's objections, then approve or reject. Approval is required
+   before final reports and the tracking entry are written.
+5. Explore Results: mention and recommendation rates, uncertainty, example answers, research,
+   discovered businesses and downloads. Use **My measurements** to reopen saved UI runs.
 
-The hooks run `ruff` when you commit, check that the commit message follows
-[Conventional Commits](https://www.conventionalcommits.org/), and run the tests when you push.
+Trend comparisons match brand, sector, city and measured model. Each point identifies its
+question set; changes across different or unknown panels are not called clear changes.
 
-### 6. Check that everything works
+## Configuration and live mode
 
-PowerShell:
+Copy [`.env.example`](.env.example) to `.env` and fill in your own credentials. `.env` and
+generated `runs/` files are ignored by Git.
 
-```powershell
-ruff check . ; ruff format --check . ; pytest -q
-python mock_run.py
-```
+| Variable | Purpose |
+| --- | --- |
+| `LLM_MODE` | `simulated` (default) or `live` |
+| `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL` | Agent provider (`groq` or `gemini`), credential and model |
+| `SUBJECT_PROVIDER`, `SUBJECT_API_KEY`, `SUBJECT_MODEL` | Model being measured; blank provider inherits the agent provider |
+| `VISION_PROVIDER`, `VISION_API_KEY`, `VISION_MODEL` | Chart-reading model; blank provider inherits the agent provider |
+| `LLM_BASE_URL`, `SUBJECT_BASE_URL`, `VISION_BASE_URL` | Optional endpoint overrides for each role |
+| `SPEND_CAP_USD` | Model-call budget per run; the example file sets `0.50` USD |
+| `SEARCH_PROVIDER` | `none` (fixtures), `duckduckgo` or `tavily` |
+| `SEARCH_API_KEY` | Required for Tavily |
+| `DEMO_PASSWORD` | Optional. In live mode the app asks for it before any model call (public demos) |
 
-macOS / Linux, or any system with `make`:
+Subject and vision roles reuse an available key for the same provider unless their own key
+is set. Blank model names use [the defaults in `config.py`](src/ai_share_of_voice/config.py).
+Pin the subject model explicitly for comparable measurements, and verify model availability
+with your provider before a live run. Choose a vision-capable model for the vision role;
+the existing Groq vision default is a known integration limitation (see the local spec).
+An unavailable vision step can be skipped without invalidating the computed statistics.
 
-```bash
-make check
-python mock_run.py
-```
-
-You should see:
-
-- `All checks passed!` from `ruff check`, and no file listed by `ruff format --check`.
-- A last line from `pytest` that says `passed` and has no `failed` or `error`.
-- `python mock_run.py` prints a series of JSON events and ends with `status=completed`. It runs the
-  whole graph with simulated nodes, so it needs no key and spends nothing. The run files are written
-  to the `runs/` folder, which Git ignores.
-
-### 7. Run the graph with real stages (optional, spends money)
-
-Task C2 swaps the simulated nodes for real ones one stage at a time, always in this order: `client` (the measured model, the mention analysis, the real statistics and stopping rule), then `mcp` (the sources the answers cite, checked with the sources service), then `vision` (our own chart and the saved screenshots, read by the vision model):
-
-```bash
-python scripts/real_run.py                           # stage client, run cap 1.00 USD
-python scripts/real_run.py --stages client,mcp
-python scripts/real_run.py --stages client,mcp,vision --cap 2
-```
-
-It needs `LLM_MODE=live` and your key in `.env`; the vision stage also needs `VISION_MODEL` and its prices. It refuses to run with the simulated client. Every model call counts against the run cap and the person cap and is written to `runs/llm_calls.jsonl`. The run pauses at the approval step and asks for your decision unless `--yes` or `--no` is supplied. The data of the run is in `runs/<run_id>/` (`brief.json`, `raw_answers.jsonl`, `analyzed_answers.jsonl`, `answers.csv`, `metrics.csv`, `charts/`). The question panel is fixed for food delivery in Madrid (`data/questions_es.csv`). The writer is still simulated, so the approval covers a simulated draft and no report is written.
-
-### 8. Open the interface and read the results of a run (optional)
+To make real model calls, set `LLM_MODE=live`, provide the required keys and run:
 
 ```bash
 python app.py
 ```
 
-Open the address it prints (it listens on `127.0.0.1` only). The **Brief** tab validates the form and starts a simulated run, auto-approved; **Activity** lists its events. The **Results** tab (task D4) reads any run folder in `runs/` that has an `answers.csv`, for example one made by `scripts/real_run.py`:
+On Windows without activation, use `.\.venv\Scripts\python.exe app.py`.
+`SEARCH_PROVIDER=none` still uses fixture sources in live model mode; choose a web backend
+for live research. Search-service quotas and charges are separate from the model-call budget.
+The budget uses estimated model costs, so it is not a provider billing guarantee. Begin
+with a small panel and few rounds: quota exhaustion or a failed required step can leave a
+partial run, with its audit trail preserved.
 
-- a table with every metric of every brand, its estimate and its 95% interval, from the vetted statistics of `stats/`;
-- one chart per metric, and the downloads: the report and the tracking CSV once the run was approved, the answers and metrics tables, the charts and the event log.
+## Command-line runner
 
-The run of the Brief tab is simulated and saves no analyzed answers, so its Results say so. Every figure is a dated sample of one model's answers, not a market share, and with fewer than ten questions the tab warns that the intervals are too optimistic. The CSV files are offered as copies in `runs/<run_id>/downloads/` whose text cells cannot start a formula in a spreadsheet; the files the code reads back are not changed. To preview the tab without spending anything, copy `tests/fixtures/sample_answers.csv` to `runs/preview/answers.csv` and reload (three questions, so it shows the warning).
+The integration runner uses the same `.env` settings. With `LLM_MODE=simulated` and
+`SEARCH_PROVIDER=none`, it can exercise the pipeline without external calls:
 
-### Troubleshooting
+```bash
+python scripts/real_run.py --questions 5 --batches 2 --language es
+```
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `pip` refuses to install `crewai`, or says no matching distribution | You are using Python 3.14 | Install Python 3.12, delete `.venv` and repeat step 2 |
-| `python --version` shows 3.14 inside the environment | The environment was created with the wrong Python | Delete `.venv` and create it again with `py -3.12 -m venv .venv` |
-| `Activate.ps1 cannot be loaded because running scripts is disabled` | PowerShell execution policy | Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned`, then activate again |
-| `ModuleNotFoundError: ai_share_of_voice` when running `python mock_run.py` | The package is not installed | Run `pip install -e .` with the environment active |
-| `make: command not found` on Windows | `make` is not installed | Use the direct commands of step 6, or run `winget install ezwinports.make` and restart the terminal |
-| `pip check` reports conflicts | A leftover environment from another Python or an older install | Delete `.venv` and start again from step 2 |
-| A commit is rejected by the hooks | The message does not follow Conventional Commits, or `ruff` reformatted a file | Use a message like `docs: fix a typo`; if `ruff` changed files, run `git add` again and commit again |
-| `git push` is rejected by the hooks | The tests fail | Run `pytest -q`, fix the failure and push again |
-| The prompt has no `(.venv)` | The environment is not active | Run the activation command of step 2 again |
+Generate a panel for another market (one line works in both Bash and PowerShell):
 
+```bash
+python scripts/real_run.py --sector "clothing stores" --city Valencia --country España --brand Zara --competitors "Mango,H&M" --generate --questions 5 --batches 2 --language es
+```
+
+Reuse a saved panel with `--panel runs/<run_id>/questions.csv`. The four custom brief flags
+(`--sector`, `--city`, `--brand`, `--competitors`) must be supplied together. Use
+`python scripts/real_run.py --help` for all options.
+
+**The integration runner automatically approves the finalization step.** Use the app for
+interactive human approval. CLI runs use in-memory checkpoints and cannot be reopened in
+the app like saved UI measurements.
+
+## Outputs and traceability
+
+Artifacts are written locally under `runs/`. Their availability depends on how far the run
+progressed and which optional steps ran.
+
+| Path | Contents |
+| --- | --- |
+| `<run_id>/questions.csv` | Exact question panel used in the run |
+| `<run_id>/raw/`, `<run_id>/analyzed/` | Batched model answers and structured analyses |
+| `<run_id>/answers.csv` | Pooled input for deterministic statistics |
+| `<run_id>/discovered_businesses.csv` | Untracked businesses found in answers |
+| `<run_id>/events.jsonl`, `<run_id>/usage.jsonl` | Graph audit events and model-call usage |
+| `<run_id>/charts/` | Generated statistics and UI charts |
+| `<run_id>/report.md` | Audit report, written after approval |
+| `<run_id>/client_report.md` | Client report in the brief's language, written after approval |
+| `<run_id>/trend.csv` | Exported trend points with model and question-set identifiers |
+| `tracking.csv` | Index of approved measurements |
+| `checkpoints.sqlite` | Persistent graph state for UI measurements |
 
 ## Architecture
 
-LangGraph defines the order of work, conditional routes, bounded loops and the human approval step. CrewAI agent specifications define roles, goals, backstories, tools and iteration limits. The graph topology places human approval before finalization. The real report and tracking CSV writer must be injected explicitly; `ui/mock_run.py` uses simulated nodes and does not activate that writer by default. Run events are logged throughout execution, including before approval.
+LangGraph controls the workflow, bounded sampling and review loops, failure paths and
+approval pause. The measured model answers questions; agent calls analyze answers and
+support discovery, research, writing and critique. Python code computes all statistics.
+CrewAI agent specifications and factories live in `agents/`; the local integration wires
+the graph through `nodes_real.py` and the shared LLM clients.
 
-The diagram shows the intended flow, not a fully integrated real run. D1–D3 modules exist, while the graph still uses simulated metrics and stopping behavior. The graph topology defines the Skeptic review loop, and tests exercise the real implementation when it is explicitly injected. However, `ui/mock_run.py` builds the graph with simulated nodes. Defining a CrewAI agent specification does not mean that the agent or its tools execute in the graph. See [`docs/architecture.md`](docs/architecture.md) for the implementation status.
-
-```mermaid
-flowchart LR
-    A[Brief<br/>validated form] --> B[questions]
-    B --> C[sampling<br/>model client: planned integration]
-    C --> D[metrics<br/>D1 implemented; graph integration pending]
-    D --> E{stop?<br/>D2 policy implemented; integration pending}
-    E -- no, another batch --> C
-    E -- yes --> F[research<br/>source tools integration pending]
-    F --> G[screenshots<br/>vision: planned]
-    G --> H[write_draft]
-    H --> I[skeptic<br/>simulated in ui/mock_run.py]
-    I -- objections, at most 2 rounds --> H
-    I -- none, or rounds used up --> J[approval_request]
-    J --> K{{human pause<br/>approval_gate}}
-    K -- approved --> L["finalize: real writer when explicitly injected"]
-    K -- rejected --> M[close_rejected]
-    B & C & D & F & G & H & I & J & L -. eligible failure .-> N[close_partial]
+```text
+Reviewed questions → Sampling → Metrics ──→ another batch, if needed
+                                  │
+                                  └→ Research (MCP) → Chart vision → Draft → Skeptic
+                                                                     ↑        │
+                                                                     └────────┘
+                                                            bounded revisions
+                                              → Human approval → Reports + tracking
 ```
 
-- How it is built and why (hybrid process, agents, tools, failure paths, status): [`docs/architecture.md`](docs/architecture.md)
-- What is not delegated, risks and controls, privacy and auditing: [`docs/ethics.md`](docs/ethics.md)
+Web content is treated as untrusted input. Research checks access rules and flags potential
+prompt injection; chart readings remain hypotheses checked against computed figures.
+Rejecting approval closes the run without final publication; required-step failures close
+it as partial.
+
+| Location | Responsibility |
+| --- | --- |
+| `app.py`, `src/ai_share_of_voice/ui/` | Gradio UI, translations, run control and results |
+| `graph.py`, `nodes_real.py`, `state.py`, `checkpoint.py` | Workflow, node wiring and persistence |
+| `schemas/` | Validated shared contracts |
+| `stats/`, `tools/` | Metrics, stopping rules, charts, mentions and source tools |
+| `agents/`, `research.py`, `writing.py`, `chart_vision.py` | Agent definitions and review pipeline |
+| `mcp_server/`, `automation/` | Source server, reports and tracking exports |
+| `data/`, `tests/`, `docs/`, `specs/` | Demo inputs, tests, decisions and implementation notes |
+
+Source paths in this table are relative to `src/ai_share_of_voice/` unless stated otherwise.
 
 ## Methodology
 
-The statistical functions in `src/ai_share_of_voice/stats/`, the stopping policy in `stats/stopping.py`, and the statistics-tool/chart modules are implemented. However, the current graph still uses simulated core nodes: its metrics node does not yet call the real statistics tool, and its stopping decision does not yet use the real stopping policy. The methodology below describes the intended measurement process; consult [`docs/architecture.md`](docs/architecture.md) before treating every step as an active runtime safeguard.
 
+The numbers are computed by deterministic, unit-tested code in `src/ai_share_of_voice/stats/`.
+No language model writes or runs the analysis.
 
 ### Sampling
 
-- A fixed set of questions (`data/questions_es.csv`, `data/questions.csv`) is sent to the model being measured. Questions are intended not to name a brand, so the process can measure whether a brand is brought up without being prompted by name.
-- Questions are asked in batches. The balanced plan asks every question the same number of times, so every question weighs the same in the results.
-- Each answer can be represented as one row per tracked brand (`data/competitors.csv`): mentioned, recommended, position among tracked brands, and tone. How mentions are counted is in [decision 8](docs/decisions.md#8-mention-counting-rules).
-- In the intended real flow, metrics are recomputed over the answers collected so far and the stopping rule decides whether another batch is worth its cost. The metric functions and stopping policy exist, but the current graph uses simulated decisions rather than this complete integrated path.
+- A reviewed question panel is sent to the model being measured. Use the demo panels
+  (`data/questions_es.csv`, `data/questions.csv`), generate one for a new brief, or reuse a
+  saved panel. Questions never name a tracked brand, so we measure whether the model brings
+  a brand up on its own. Each run saves the questions it actually asks.
+- Questions are asked in batches. Every batch asks every question the same number of times
+  (a balanced plan), so every question weighs the same in the results.
+- Each answer becomes one row per tracked brand (the brief, or `data/competitors.csv` for the demo): mentioned,
+  recommended, position among the tracked brands, and tone. How mentions are counted is in
+  [decision 8](docs/decisions.md#8-mention-counting-rules).
+- After each batch, metrics are recomputed over all answers so far and the stopping rule
+  decides whether another batch is worth its cost.
 
 ### Metrics
 
-Each metric is a ratio of sums, but its denominator differs: mention and recommendation rates use answers, share of voice uses tracked mentions, recommendation conversion uses mentions, and net tone uses mentions with a tone. The balanced sampling plan gives every question the same number of answers; it does not make every metric an equal-weight average over answers.
+Every metric is a ratio of sums over answers, so every answer weighs the same.
 
 | Metric | Numerator | Denominator |
 | --- | --- | --- |
@@ -221,44 +222,99 @@ Each metric is a ratio of sums, but its denominator differs: mention and recomme
 | `recommendation_conversion` | answers that recommend the brand | answers that mention it |
 | `net_tone` | positive minus negative mentions (from -1 to 1) | mentions with a tone |
 
-`recommendation_conversion` is undefined for a brand that is never mentioned; it is shown as "n/a", never as 0.
+`recommendation_conversion` is undefined for a brand that is never mentioned; it is shown as
+"n/a", never as 0.
 
 ### Confidence intervals (95%)
 
-Answers to the same question are not independent: the same wording tends to bring up the same brands. We therefore have less information than the number of answers suggests, so intervals are computed with the question as the unit.
+Answers to the same question are not independent: the same wording tends to bring up the
+same brands. We therefore have less information than the number of answers suggests, so
+intervals are computed with the question as the unit.
 
-- **Wilson score interval** for binary-success ratios with a defined denominator (for example, mention rate or recommendation conversion). It behaves well near 0 and 1 and with small samples, but assumes independent trials, so on its own it may be too narrow when answers to the same question are correlated.
-- **Cluster bootstrap**: whole questions are resampled with replacement (2,000 resamples, fixed seed), the metric is recomputed, and the 2.5th and 97.5th percentiles are kept. This keeps the correlation between answers to the same question. For defined metrics such as mention rate, the interval can collapse to a single point when a brand is always or never mentioned; metrics with no eligible denominator are undefined.
-- **Reported interval**: for the count metrics, the hull of both (from the lower of the two lower limits to the higher of the two upper limits), so it is never narrower than either; for `share_of_voice` and `net_tone`, the cluster bootstrap. The hull is a conservative reporting rule: its coverage has not been checked by simulation.
-- All brands use the same question resamples, so they are compared on the same simulated panels. Results with fewer than 10 questions are flagged as `few_questions`, because the bootstrap can be too optimistic there.
-
-These intervals quantify uncertainty under the chosen resampling assumptions. They should not be described as calibrated 95% coverage unless that coverage has been validated.
+- **Wilson score interval** for the metrics that count successes among answers. It behaves
+  well near 0 and 1 and with small samples, but assumes independent answers, so on its own
+  it is too narrow.
+- **Cluster bootstrap**: whole questions are resampled with replacement (2,000 resamples,
+  fixed seed), the metric is recomputed, and the 2.5th and 97.5th percentiles are kept. This
+  keeps the correlation between answers to the same question. It collapses to a single point
+  when a brand is always or never mentioned.
+- **Reported interval**: for the count metrics, the hull of both (from the lower of the two
+  lower limits to the higher of the two upper limits), so it is never narrower than either;
+  for `share_of_voice` and `net_tone`, the cluster bootstrap. The hull is a conservative
+  reporting rule: its coverage has not been checked by simulation.
+- All brands use the same question resamples, so they are compared on the same simulated
+  panels. Results with fewer than 10 questions are flagged as `few_questions`, because the
+  bootstrap is too optimistic there.
 
 ### Stopping rule
 
-The implemented `should_stop` policy in `stats/stopping.py` watches the half-width of the client brand's reported interval after each batch. The current graph still uses a simulated stopping decision; the rules below describe the policy that should be applied when the real policy is connected to the runtime:
+`should_stop` watches the half-width of the client brand's reported interval after each
+batch. The first rule that holds is applied:
 
-1. **Precision reached**: the half-width is at or below the target, after at least `min_batches` batches and with at least 10 questions.
-2. **Marginal return**: the half-width shrank by less than `marginal_gain_threshold` in each of the last `patience` batches. The half-width often shrinks roughly with the square root of the number of answers (halving it may cost about four times as many), so at some point more answers stop buying much precision.
-3. **Budget exhausted**: the next batch, at the average cost of the batches so far, would go over the sampling budget. Sampling is intended to use at most `sampling_budget_share` of the run cap and leave `agent_reserve_usd` for later agent calls.
+1. **Precision reached**: the half-width is at or below the target, after at least
+   `min_batches` batches and with at least 10 questions.
+2. **Marginal return**: the half-width shrank by less than `marginal_gain_threshold` in each
+   of the last `patience` batches. The half-width shrinks roughly with the square root of the
+   number of answers (halving it costs about four times as many), so at some point more
+   answers stop buying precision.
+3. **Budget exhausted**: the next batch, at the average cost of the batches so far, would go
+   over the sampling budget. Sampling may use at most `sampling_budget_share` of the run cap
+   and always leaves `agent_reserve_usd` for the agents that run after it.
 4. **Max batches** reached.
 
-Statistical reasons come first, so the explanation says why the result is good enough, not only that a limit was hit. The policy is designed to record each decision with its reason; the current graph's simulated stopping decision does not execute this policy. Defaults: `min_batches` 2, `marginal_gain_threshold` 0.005, `patience` 2, `sampling_budget_share` 0.7, `agent_reserve_usd` 0.20. The precision target and spending caps are set in [decision 3](docs/decisions.md#3-model-provider-and-spending-cap). The average cost of previous batches is an estimate, not a guarantee.
+Statistical reasons come first, so the explanation says why the result is good enough, not
+only that a limit was hit. Every decision is logged with its reason. Defaults:
+`min_batches` 2, `marginal_gain_threshold` 0.005, `patience` 2, `sampling_budget_share` 0.7,
+`agent_reserve_usd` 0.20. The precision target and the spending caps are set in
+[decision 3](docs/decisions.md#3-model-provider-and-spending-cap).
 
 ### Limits
 
-- A result is a dated sample of one model, in one language, with one question set. It is not market share and not what real users are shown.
-- Intervals treat the questions as a sample of similar questions. They say nothing about questions phrased very differently.
-- Intervals cover sampling variability only. Errors in detecting mentions, recommendations or tone are not included.
-- Mentions are matched by name and variants: paraphrases ("the orange delivery app") and brands outside `data/competitors.csv` can be missed (see [decision 7](docs/decisions.md#7-untracked-brands-in-answers)).
+- A result is a dated sample of one model, in one language, with one question set. It is not
+  market share and not what real users are shown.
+- Intervals treat the questions as a sample of similar questions. They say nothing about
+  questions phrased very differently.
+- Intervals cover sampling variability only. Errors in detecting mentions, recommendations or
+  tone are not included.
+- Mentions are matched by name and variants: paraphrases ("the orange delivery app") and
+  untracked brands are excluded from the headline metrics. Discovery lists other businesses
+  separately; they do not silently change the comparison set (see
+  [decision 7](docs/decisions.md#7-untracked-brands-in-answers)).
 - No causality is claimed between a cited web source and a recommendation.
-- A model API response may differ from what a person sees in an assistant app, which may add web search or other settings.
-- Spending limits protect only calls that pass through a client that enforces the cap. CrewAI agents built with `build_budgeted_agents` (`agents/factory.py`) are routed through that client by an adapter (task A2b); agents given any other `llm`, such as a model name string, call the provider by themselves and are not covered. The adapter was written against the CrewAI 1.15 documentation and has not been run with a live CrewAI by its author.
+- The cost of the next batch is an estimate (an average), not a guarantee.
 
-## Sections (owners)
-- Architecture, process justification and ethics — J
-- Configuration and usage — An
+## Development checks
 
-## Contributing
+With the virtual environment activated and development dependencies installed:
 
-See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).
+```bash
+python -m ruff check .
+python -m ruff format --check .
+python -m pytest -q --cov=ai_share_of_voice --cov-report=term-missing
+```
+
+On Windows without activation, replace `python` with `.\.venv\Scripts\python.exe`.
+If `make` is available, `make install` installs development dependencies and `make check`
+runs the same lint, formatting and test checks. Tests use simulated clients and fixtures;
+API keys are not required.
+
+## Contributors
+
+| Who | GitHub | Area | What they own |
+| --- | --- | --- | --- |
+| E | [@adryeli](https://github.com/adryeli) | Data & Statistics | Wilson and bootstrap intervals, the stopping rule, the stats tool and charts, the results tab, the methodology section, the glossary, the demo data and the integrated local app (question review, business discovery, trends, report drafting). |
+| J | [@JCRbit](https://github.com/JCRbit) | Agents & Orchestration | The LangGraph workflow with human approval and SQLite checkpoints, the shared Pydantic contracts, the seven CrewAI agents, the Skeptic review, error handling and partial closes, the report and tracking CSV, the architecture and ethics documents. |
+| An | [@Anasfady](https://github.com/Anasfady) | Integrations & Platform | Repository setup and quality checks, the budgeted model client, the MCP sources server and its client, vision analysis, the `mock_run.py` simulation and the Gradio app skeleton. |
+
+Roles follow the [project plan](docs/PROJECT_PLAN.md); the git history shows the exact changes.
+
+## Project documentation
+
+- [Glossary](docs/glossary.md) — product terms and interpretation of results.
+- [Decisions](docs/decisions.md) — methodology and team decisions.
+- [Architecture](docs/architecture.md) — the graph, agents, tools and data flow.
+- [Ethics](docs/ethics.md) — scope, privacy and responsible use.
+- [Project plan](docs/PROJECT_PLAN.md) — phases, owners and tasks.
+- [Local integration spec](specs/local-integration.md) — branch scope, implementation log and open items.
+- [Deploying the demo](docs/DEPLOY.md) — Render, Hugging Face Spaces and the demo password.
+- [Contributing](docs/CONTRIBUTING.md) — workflow, review rules and local hooks.

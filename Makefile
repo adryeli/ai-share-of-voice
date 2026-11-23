@@ -2,7 +2,6 @@
 
 install:
 	pip install -r requirements-dev.txt
-	pip install -e .
 
 lint:
 	ruff check . && ruff format --check .

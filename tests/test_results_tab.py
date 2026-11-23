@@ -1,400 +1,183 @@
-import csv
-import os
-import re
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
-from ai_share_of_voice.event_log import EventLog
-from ai_share_of_voice.schemas.events import EventStatus, GraphEvent
-from ai_share_of_voice.stats.metrics import ANSWER_COLUMNS, METRICS, brand_metrics, load_answers
-from ai_share_of_voice.ui import results_tab
-from ai_share_of_voice.ui.results_tab import (
-    ResultsError,
-    ResultsPanel,
-    ResultsView,
-    format_estimate,
-    format_interval,
-    list_runs,
-    load_results,
-    safe_csv_text,
-    show_results,
-    summary_text,
-    view_for_ended_run,
-)
-from ai_share_of_voice.ui.run_manager import RunSnapshot
+from ai_share_of_voice.automation.report import REPORT_FILE_NAME, ReportData
+from ai_share_of_voice.automation.tracking_csv import FIELDS, TRACKING_FILE_NAME, upsert_row
+from ai_share_of_voice.schemas.stopping import BatchSummary, StopDecision, StopReason
+from ai_share_of_voice.stats.metrics import brand_metrics, load_answers
+from ai_share_of_voice.tools.stats_tool import ANSWERS_FILE_NAME
+from ai_share_of_voice.ui.results_tab import build_results_view, table_rows
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_answers.csv"
-RUN = "run-20261101-120000-abc123"
-BRANDS = ("Acme Food", "Beta Eats", "Never Seen")
-PNG = b"\x89PNG\r\n\x1a\n"
+RUN_ID = "run-20261026-120000-abc123"
+GENERATED_AT = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
 
 
-def make_answers(brands=BRANDS, questions: int = 12) -> pd.DataFrame:
-    """Acme is mentioned and recommended on even questions, Beta on odd ones, the third never."""
-    rows = []
-    for number in range(questions):
-        for batch in range(2):
-            response = f"q{number:02d}-b{batch}"
-            for brand in brands:
-                if brand == brands[0] and number % 2 == 0:
-                    detail = (True, True, 1, "positive")
-                elif brand == brands[1] and number % 2 == 1:
-                    detail = (True, False, 1, "neutral")
-                else:
-                    detail = (False, False, None, None)
-                rows.append([response, f"q{number:02d}", batch, brand, *detail])
-    return pd.DataFrame(rows, columns=list(ANSWER_COLUMNS))
+def fixture_mention_rate(brand: str) -> float:
+    metrics = brand_metrics(load_answers(FIXTURE))
+    rows = metrics[(metrics["metric"] == "mention_rate") & (metrics["brand"] == brand)]
+    return float(rows["estimate"].iloc[0])
 
 
-def make_run(runs: Path, run_id: str = RUN, frame: pd.DataFrame | None = None) -> Path:
-    folder = runs / run_id
-    folder.mkdir(parents=True)
-    (frame if frame is not None else make_answers()).to_csv(folder / "answers.csv", index=False)
-    return folder
-
-
-def snapshot(status: str = "completed", run_id: str | None = RUN) -> RunSnapshot:
-    return RunSnapshot(
-        run_id=run_id, status=status, events=(), spent_usd=0.0, cap_usd=2.0, error=None
+def make_data(*, run_id: str = RUN_ID, brand_share: float | None = None) -> ReportData:
+    share = fixture_mention_rate("Glovo") if brand_share is None else brand_share
+    summary = BatchSummary(
+        batch_index=0,
+        n_answers=6,
+        brand_share=share,
+        ci_low=max(share - 0.2, 0.0),
+        ci_high=min(share + 0.2, 1.0),
+        cumulative_spend_usd=0.05,
+        n_questions=3,
+    )
+    return ReportData(
+        run_id=run_id,
+        generated_at=GENERATED_AT,
+        brand="Glovo",
+        competitors=("Just Eat", "Uber Eats"),
+        sector="food delivery",
+        city="Madrid",
+        history=(summary,),
+        stop=StopDecision(stop=True, reason=StopReason.MAX_BATCHES, explanation="Batch limit"),
+        spend_usd=0.05,
     )
 
 
-def csv_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
+@pytest.fixture
+def runs_dir(tmp_path: Path) -> Path:
+    (tmp_path / "runs" / RUN_ID).mkdir(parents=True)
+    return tmp_path / "runs"
 
 
-def percentages(text: str) -> list[float]:
-    return [float(number) for number in re.findall(r"(-?\d+(?:\.\d+)?)%", text)]
+@pytest.fixture
+def runs_with_answers(runs_dir: Path) -> Path:
+    shutil.copy(FIXTURE, runs_dir / RUN_ID / ANSWERS_FILE_NAME)
+    return runs_dir
 
 
-# ---- which runs are listed -------------------------------------------------------------------
+# ---- layer A: the headline comes from the run state -----------------------------------------
 
 
-def test_only_runs_with_answers_are_listed_newest_first(tmp_path: Path) -> None:
-    runs = tmp_path / "runs"
-    make_run(runs, "run-20261101-100000-aaaaaa")
-    make_run(runs, "run-20261102-100000-bbbbbb")
-    (runs / "run-20261103-100000-cccccc").mkdir()
-    make_run(runs, "bad name")
-    (runs / "tracking.csv").write_text("run_id\n", encoding="utf-8")
-    assert list_runs(runs) == ["run-20261102-100000-bbbbbb", "run-20261101-100000-aaaaaa"]
-    assert list_runs(tmp_path / "missing") == []
+def test_the_headline_comes_from_the_last_batch_even_without_answers(runs_dir: Path) -> None:
+    view = build_results_view(make_data(), runs_dir)
+    assert view.headline is not None
+    assert view.headline.estimate == pytest.approx(fixture_mention_rate("Glovo"))
+    assert view.headline.n_answers == 6
+    assert view.headline.n_questions == 3
+    assert view.table == ()
 
 
-# ---- figures and intervals -------------------------------------------------------------------
-
-
-def test_a_run_becomes_a_table_with_every_metric_of_every_brand(tmp_path: Path) -> None:
-    make_run(tmp_path)
-    results = load_results(tmp_path, RUN)
-    assert len(results.rows) == len(METRICS) * len(BRANDS)
-    assert all(len(row) == len(results_tab.TABLE_HEADERS) for row in results.rows)
-    assert [row[1] for row in results.rows[:3]] == list(BRANDS)
-    metrics = list(dict.fromkeys(row[0] for row in results.rows))
-    assert metrics[:3] == ["Mention rate", "Recommendation rate", "Top-1 rate"]
-    assert (results.n_answers, results.n_questions, results.n_batches) == (24, 12, 2)
-    assert results.few_questions is False
-
-
-def test_the_estimates_are_right_and_the_interval_contains_them(tmp_path: Path) -> None:
-    make_run(tmp_path)
-    rows = {(row[0], row[1]): row for row in load_results(tmp_path, RUN).rows}
-    acme = rows[("Mention rate", "Acme Food")]
-    assert acme[2] == "50.0%" and rows[("Mention rate", "Never Seen")][2] == "0.0%"
-    low, high = percentages(acme[3])
-    assert low < 50.0 < high
-    assert rows[("Recommendation rate", "Beta Eats")][2] == "0.0%"
-    assert rows[("Net tone", "Acme Food")][2] == "+1.00"
-
-
-def test_the_figures_match_the_vetted_statistics(tmp_path: Path) -> None:
-    folder = make_run(tmp_path)
-    table = brand_metrics(load_answers(folder / "answers.csv"))
-    expected = table[(table["metric"] == "mention_rate") & (table["brand"] == "Acme Food")].iloc[0]
-    row = load_results(tmp_path, RUN).rows[0]
-    assert row[2] == format_estimate("mention_rate", expected["estimate"])
-    assert row[3] == format_interval("mention_rate", expected["ci_low"], expected["ci_high"])
-
-
-def test_a_metric_that_cannot_be_computed_is_not_defined_never_zero(tmp_path: Path) -> None:
-    make_run(tmp_path)
-    rows = {(row[0], row[1]): row for row in load_results(tmp_path, RUN).rows}
-    never = rows[("Recommendation conversion", "Never Seen")]
-    assert never[2] == "n/a" and never[3] == "n/a" and "not defined" in never[4]
-    assert rows[("Mention rate", "Never Seen")][4] == ""
-
-
-def test_rates_are_percentages_and_tone_is_a_signed_score() -> None:
-    assert format_estimate("mention_rate", 0.5) == "50.0%"
-    assert format_estimate("net_tone", 0.25) == "+0.25"
-    assert format_estimate("net_tone", -1.0) == "-1.00"
-    assert format_estimate("mention_rate", float("nan")) == "n/a"
-    assert format_estimate("mention_rate", None) == "n/a"
-    assert format_interval("mention_rate", 0.25, 0.75) == "25.0% to 75.0%"
-    assert format_interval("net_tone", -0.5, 0.5) == "-0.50 to +0.50"
-    assert format_interval("mention_rate", float("nan"), 0.5) == "n/a"
-
-
-def test_too_few_questions_are_flagged_in_the_summary(tmp_path: Path) -> None:
-    folder = tmp_path / RUN
-    folder.mkdir(parents=True)
-    shutil.copy(FIXTURE, folder / "answers.csv")
-    results = load_results(tmp_path, RUN)
-    assert results.few_questions is True and results.n_questions == 3
-    text = summary_text(tmp_path, results)
-    assert "Only 3 questions" in text and "too optimistic" in text
-
-
-def test_the_summary_says_what_the_figures_are_and_are_not(tmp_path: Path) -> None:
-    make_run(tmp_path)
-    text = summary_text(tmp_path, load_results(tmp_path, RUN))
-    assert "not a market share" in text and "coverage has not been validated" in text
-    assert "24 answers to 12 questions, in 2 batches" in text and "Only" not in text
-
-
-# ---- charts ----------------------------------------------------------------------------------
-
-
-def test_every_metric_gets_its_chart_and_a_current_chart_is_not_redrawn(tmp_path: Path) -> None:
-    folder = make_run(tmp_path)
-    results = load_results(tmp_path, RUN)
-    names = [Path(path).name for path, _ in results.charts]
-    assert names == [f"{metric}_by_brand.png" for metric in METRICS]
-    assert [caption for _, caption in results.charts][0] == "Mention rate"
-    assert all(Path(path).read_bytes().startswith(PNG) for path, _ in results.charts)
-    chart = folder / "charts" / "mention_rate_by_brand.png"
-    before = chart.stat().st_mtime_ns
-    load_results(tmp_path, RUN)
-    assert chart.stat().st_mtime_ns == before
-
-
-def test_a_chart_older_than_the_answers_is_drawn_again(tmp_path: Path) -> None:
-    folder = make_run(tmp_path)
-    load_results(tmp_path, RUN)
-    chart = folder / "charts" / "mention_rate_by_brand.png"
-    old = chart.stat().st_mtime - 100
-    os.utime(chart, (old, old))
-    load_results(tmp_path, RUN)
-    assert chart.stat().st_mtime > old + 50
-
-
-# ---- downloads -------------------------------------------------------------------------------
-
-
-def test_the_downloads_come_in_a_fixed_order_and_only_if_they_exist(tmp_path: Path) -> None:
-    folder = make_run(tmp_path)
-    bare = [Path(p).name for p in load_results(tmp_path, RUN).downloads]
-    assert bare == ["answers.csv", "metrics.csv", *[f"{m}_by_brand.png" for m in METRICS]]
-
-    (folder / "report.md").write_text("# Report\n", encoding="utf-8")
-    (tmp_path / "tracking.csv").write_text("run_id\n", encoding="utf-8")
-    EventLog(tmp_path).append(GraphEvent(run_id=RUN, node="sampling", status=EventStatus.STARTED))
-    full = [Path(p).name for p in load_results(tmp_path, RUN).downloads]
-    assert full[:4] == ["report.md", "tracking.csv", "answers.csv", "metrics.csv"]
-    assert full[-1] == "events.jsonl" and len(full) == len(bare) + 3
-
-
-def test_a_file_that_is_really_somewhere_else_is_not_offered(tmp_path: Path) -> None:
-    runs = tmp_path / "runs"
-    folder = make_run(runs)
-    secret = tmp_path / "secret.md"
-    secret.write_text("private", encoding="utf-8")
-    try:
-        (folder / "report.md").symlink_to(secret)
-    except OSError:
-        pytest.skip("symbolic links are not available here")
-    results = load_results(runs, RUN)
-    offered = [Path(path).name for path in results.downloads]
-    assert "report.md" not in offered and "secret.md" not in offered
-    assert results.has_report is False
-
-
-def test_the_csv_downloads_cannot_start_a_formula_and_the_originals_are_untouched(
-    tmp_path: Path,
+def test_the_sample_label_is_dated_and_never_says_market_share_as_a_claim(
+    runs_dir: Path,
 ) -> None:
-    brands = ('=HYPERLINK("http://evil.example")', "+34 Taxi", "@cmd")
-    folder = make_run(tmp_path, frame=make_answers(brands))
-    original = (folder / "answers.csv").read_text(encoding="utf-8")
-    results = load_results(tmp_path, RUN)
-    for name in ("answers.csv", "metrics.csv"):
-        copy = folder / "downloads" / name
-        assert str(copy) in results.downloads
-        shown = {row["brand"] for row in csv_rows(copy)}
-        assert shown == {"'" + brand for brand in brands}
-    assert (folder / "answers.csv").read_text(encoding="utf-8") == original
-    assert set(load_answers(folder / "answers.csv")["brand"]) == set(brands)
-    numbers = csv_rows(folder / "downloads" / "metrics.csv")[0]
-    assert 0 <= float(numbers["estimate"]) <= 1 and numbers["metric"] == "mention_rate"
+    label = build_results_view(make_data(), runs_dir).sample_label
+    assert "2026-10-26" in label
+    assert "not market share" in label
 
 
-def test_safe_csv_text_only_touches_text_cells() -> None:
-    frame = pd.DataFrame({"brand": ["=x", "ok", "-1"], "estimate": [-0.5, 0.25, 1.0]})
-    rows = list(csv.DictReader(safe_csv_text(frame).splitlines()))
-    assert [r["brand"] for r in rows] == ["'=x", "ok", "'-1"]
-    assert [r["estimate"] for r in rows] == ["-0.5", "0.25", "1.0"]
+def test_the_convergence_chart_is_drawn_only_when_a_target_is_given(runs_dir: Path) -> None:
+    without = build_results_view(make_data(), runs_dir)
+    assert without.chart_paths == ()
+    with_target = build_results_view(make_data(), runs_dir, target_half_width=0.1)
+    chart = Path(with_target.chart_paths[0])
+    assert chart.parent == runs_dir / RUN_ID / "charts"
+    assert chart.exists()
 
 
-def test_looking_at_a_run_twice_does_not_rewrite_its_download_files(tmp_path: Path) -> None:
-    folder = make_run(tmp_path)
-    load_results(tmp_path, RUN)
-    copy = folder / "downloads" / "answers.csv"
-    old = (copy.stat().st_mtime_ns // 2_000_000_000 - 50) * 2_000_000_000
-    os.utime(copy, ns=(old, old))
-    load_results(tmp_path, RUN)
-    assert copy.stat().st_mtime_ns == old
+# ---- layer B: the per-brand table comes from the vetted statistics --------------------------
 
 
-# ---- the metrics are computed once -----------------------------------------------------------
-
-
-def test_the_metrics_are_computed_once_until_the_answers_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_the_table_has_one_row_per_brand_with_the_vetted_figures(
+    runs_with_answers: Path,
 ) -> None:
-    folder = make_run(tmp_path)
-    calls: list[int] = []
-
-    def counting(answers: pd.DataFrame) -> pd.DataFrame:
-        calls.append(len(answers))
-        return brand_metrics(answers)
-
-    monkeypatch.setattr(results_tab, "brand_metrics", counting)
-    results_tab._CACHE.clear()
-    load_results(tmp_path, RUN)
-    load_results(tmp_path, RUN)
-    assert len(calls) == 1
-    make_answers(questions=14).to_csv(folder / "answers.csv", index=False)
-    assert load_results(tmp_path, RUN).n_questions == 14 and len(calls) == 2
+    view = build_results_view(make_data(), runs_with_answers)
+    assert sorted(row.brand for row in view.table) == ["Glovo", "Just Eat", "Uber Eats"]
+    by_brand = {row.brand: row for row in view.table}
+    for brand in by_brand:
+        assert by_brand[brand].estimate == pytest.approx(fixture_mention_rate(brand))
+    assert Path(view.chart_paths[0]).name == "mention_rate_by_brand.png"
 
 
-# ---- how it ended ----------------------------------------------------------------------------
+def test_too_few_questions_raises_a_visible_note(runs_with_answers: Path) -> None:
+    view = build_results_view(make_data(), runs_with_answers)
+    assert any("few questions" in note.lower() for note in view.notes)
 
 
-def test_the_summary_tells_how_the_run_ended_and_whether_it_has_a_report(tmp_path: Path) -> None:
-    folder = make_run(tmp_path)
-    assert "How it ended" not in summary_text(tmp_path, load_results(tmp_path, RUN))
-    EventLog(tmp_path).append(
-        GraphEvent(
-            run_id=RUN, node="finalize", status=EventStatus.SUCCEEDED, cumulative_spend_usd=0.3
-        )
-    )
-    text = summary_text(tmp_path, load_results(tmp_path, RUN))
-    assert "How it ended: completed, spend $0.30." in text
-    assert "No report was written" in text
-    (folder / "report.md").write_text("# Report\n", encoding="utf-8")
-    assert "approved report is in the downloads" in summary_text(
-        tmp_path, load_results(tmp_path, RUN)
-    )
+def test_missing_answers_explain_why_the_table_is_empty(runs_dir: Path) -> None:
+    view = build_results_view(make_data(), runs_dir)
+    assert any("analyzed answers" in note for note in view.notes)
 
 
-# ---- problems become messages ----------------------------------------------------------------
+def test_a_headline_that_disagrees_with_the_table_is_flagged(runs_with_answers: Path) -> None:
+    agree = build_results_view(make_data(), runs_with_answers)
+    assert not any("differ" in note for note in agree.notes)
+    disagree = build_results_view(make_data(brand_share=0.95), runs_with_answers)
+    assert any("differ" in note for note in disagree.notes)
 
 
-@pytest.mark.parametrize("run_id", ["", ".", "..", "../outside", "a/b", " run", "run name"])
-def test_a_run_id_that_is_not_a_plain_folder_name_is_refused(tmp_path: Path, run_id: str) -> None:
-    make_run(tmp_path)
-    with pytest.raises(ResultsError, match="choose a run"):
-        load_results(tmp_path, run_id)
-    assert show_results(tmp_path, run_id).rows == []
+def test_a_client_brand_missing_from_the_table_is_flagged(runs_with_answers: Path) -> None:
+    data = make_data().model_copy(update={"brand": "Unknown Brand"})
+    view = build_results_view(data, runs_with_answers)
+    assert any("Unknown Brand" in note for note in view.notes)
 
 
-def test_a_run_without_answers_says_so(tmp_path: Path) -> None:
-    (tmp_path / RUN).mkdir()
-    with pytest.raises(ResultsError, match="no analyzed answers"):
-        load_results(tmp_path, RUN)
-    assert "no analyzed answers" in show_results(tmp_path, RUN).summary
+def test_the_table_shows_percentages_with_intervals_and_n_a(runs_with_answers: Path) -> None:
+    view = build_results_view(make_data(), runs_with_answers, metric="recommendation_conversion")
+    cells = [cell for row in table_rows(view) for cell in row]
+    assert any("(" in cell and "%" in cell for cell in cells)
+    never = view.model_copy(update={"table": ()})
+    assert table_rows(never) == []
 
 
-def test_a_damaged_answers_file_is_reported_without_echoing_its_content(tmp_path: Path) -> None:
-    folder = tmp_path / RUN
-    folder.mkdir()
-    (folder / "answers.csv").write_text("secret,other\nTOP-SECRET-VALUE,1\n", encoding="utf-8")
-    view = show_results(tmp_path, RUN)
-    assert "cannot be read" in view.summary and "TOP-SECRET-VALUE" not in view.summary
-    assert view.rows == [] and view.charts == [] and view.files == []
+def test_an_undefined_metric_is_shown_as_n_a(runs_with_answers: Path) -> None:
+    view = build_results_view(make_data(), runs_with_answers, metric="recommendation_conversion")
+    undefined = view.table[0].model_copy(update={"estimate": None, "ci_low": None, "ci_high": None})
+    shown = table_rows(view.model_copy(update={"table": (undefined,)}))
+    assert shown[0][1] == "n/a"
 
 
-def test_too_little_data_is_a_message_not_a_crash(tmp_path: Path) -> None:
-    make_run(tmp_path, frame=make_answers(questions=1))
-    assert "not enough data" in show_results(tmp_path, RUN).summary
+# ---- layer C: downloads exist only after the approval ---------------------------------------
 
 
-def test_no_choice_gives_a_hint(tmp_path: Path) -> None:
-    assert show_results(tmp_path, None).summary == "Choose a run to see its results."
+def test_there_are_no_downloads_before_the_report_exists(runs_dir: Path) -> None:
+    view = build_results_view(make_data(), runs_dir)
+    assert view.downloads == ()
+    assert any("approved" in note for note in view.notes)
 
 
-# ---- what to show when a run ends ------------------------------------------------------------
+def test_after_approval_the_report_and_only_this_runs_tracking_row_are_offered(
+    runs_dir: Path,
+) -> None:
+    run_dir = runs_dir / RUN_ID
+    (run_dir / REPORT_FILE_NAME).write_text("# report", encoding="utf-8")
+    other_row = dict.fromkeys(FIELDS, "x")
+    other_row["run_id"] = "run-other-secret"
+    upsert_row(runs_dir / TRACKING_FILE_NAME, other_row)
+
+    view = build_results_view(make_data(), runs_dir)
+
+    offered = [Path(path) for path in view.downloads]
+    assert {path.name for path in offered} == {REPORT_FILE_NAME, "tracking_row.csv"}
+    assert all(path.parent == run_dir for path in offered)
+    row_text = (run_dir / "tracking_row.csv").read_text(encoding="utf-8")
+    assert RUN_ID in row_text
+    assert "run-other-secret" not in row_text
 
 
-def test_nothing_changes_while_a_run_is_going_or_before_one_starts(tmp_path: Path) -> None:
-    make_run(tmp_path)
-    assert view_for_ended_run(tmp_path, snapshot("running")) is None
-    assert view_for_ended_run(tmp_path, snapshot("idle", run_id=None)) is None
+def test_the_tracking_row_is_not_duplicated_when_the_view_is_built_twice(
+    runs_dir: Path,
+) -> None:
+    (runs_dir / RUN_ID / REPORT_FILE_NAME).write_text("# report", encoding="utf-8")
+    build_results_view(make_data(), runs_dir)
+    build_results_view(make_data(), runs_dir)
+    lines = (runs_dir / RUN_ID / "tracking_row.csv").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2  # header and one row
 
 
-def test_a_run_that_ended_with_figures_is_selected_and_shown(tmp_path: Path) -> None:
-    make_run(tmp_path)
-    selected, view = view_for_ended_run(tmp_path, snapshot("completed"))
-    assert selected == RUN and len(view.rows) == len(METRICS) * len(BRANDS)
-    assert view.charts and view.files
-
-
-def test_a_run_that_ended_without_figures_says_why_and_selects_nothing(tmp_path: Path) -> None:
-    selected, view = view_for_ended_run(tmp_path, snapshot("partial"))
-    assert selected is None and view.rows == []
-    assert "closed in a partial state" in view.summary and "no analyzed answers" in view.summary
-
-
-def test_the_view_and_the_panel_agree_on_the_order_of_the_outputs() -> None:
-    view = ResultsView("text", [["a"]], [("p.png", "c")], ["f.csv"])
-    assert view.as_outputs() == ("text", [["a"]], [("p.png", "c")], ["f.csv"])
-    panel = ResultsPanel(run="r", refresh="b", summary="s", table="t", charts="c", files="f")
-    assert panel.outputs == ["s", "t", "c", "f"]
-
-
-# ---- the components --------------------------------------------------------------------------
-
-
-def test_the_tab_builds_its_components_with_the_newest_run_selected(tmp_path: Path) -> None:
-    gr = pytest.importorskip("gradio")
-    make_run(tmp_path, "run-20261101-100000-aaaaaa")
-    make_run(tmp_path, "run-20261102-100000-bbbbbb")
-    with gr.Blocks():
-        panel = results_tab.build_results_tab(tmp_path, "hello")
-    assert len(panel.outputs) == 4
-    assert panel.run.value == "run-20261102-100000-bbbbbb"
-
-
-def test_downloads_directory_symlink_cannot_write_outside_runs(tmp_path: Path) -> None:
-    runs = tmp_path / "runs"
-    folder = make_run(runs)
-    external = tmp_path / "external_downloads"
-    external.mkdir()
-
-    try:
-        (folder / "downloads").symlink_to(external, target_is_directory=True)
-    except OSError:
-        pytest.skip("directory symbolic links are not available here")
-
-    load_results(runs, RUN)
-
-    assert list(external.iterdir()) == []
-
-
-def test_charts_directory_symlink_cannot_write_outside_runs(tmp_path: Path) -> None:
-    runs = tmp_path / "runs"
-    folder = make_run(runs)
-    external = tmp_path / "external_charts"
-    external.mkdir()
-
-    try:
-        (folder / "charts").symlink_to(external, target_is_directory=True)
-    except OSError:
-        pytest.skip("directory symbolic links are not available here")
-
-    load_results(runs, RUN)
-
-    assert list(external.iterdir()) == []
+@pytest.mark.parametrize("run_id", ["../escape", "a/b", "..", "run id"])
+def test_an_unsafe_run_id_is_rejected_before_touching_the_disk(runs_dir: Path, run_id: str) -> None:
+    with pytest.raises(ValueError, match="run_id"):
+        build_results_view(make_data(run_id=run_id), runs_dir)

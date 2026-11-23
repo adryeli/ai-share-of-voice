@@ -1,0 +1,33 @@
+# Render blueprint: https://render.com/docs/blueprint-spec
+# Secrets (sync: false) are asked in the Render dashboard; never write them here.
+services:
+  - type: web
+    name: ai-share-of-voice
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      # Where the app listens: all interfaces, on the port Render routes to.
+      - key: GRADIO_SERVER_NAME
+        value: 0.0.0.0
+      - key: GRADIO_SERVER_PORT
+        value: "10000"
+      - key: PORT
+        value: "10000"
+      # simulated = free demo, no password. Change to live in the dashboard for real calls.
+      - key: LLM_MODE
+        value: simulated
+      - key: LLM_PROVIDER
+        value: groq
+      - key: SPEND_CAP_USD
+        value: "0.50"
+      - key: SEARCH_PROVIDER
+        value: none
+      - key: DEMO_PASSWORD
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
