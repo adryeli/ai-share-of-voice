@@ -53,7 +53,8 @@ export async function downloadFile(id, name) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  // Some browsers read the blob after the click returns: revoke it a little later.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export const pct = (v) => (v == null ? "n/a" : `${Math.round(v * 100)}%`);

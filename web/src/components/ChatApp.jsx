@@ -68,6 +68,7 @@ export default function ChatApp({ lang, setLang }) {
   const [phIdx, setPhIdx] = useState(0); // which example sentence the empty chat box shows
   const inputRef = useRef(null);
   const [askPassword, setAskPassword] = useState(null); // a function to retry after the password
+  const [pollKey, setPollKey] = useState(0); // bumped to restart polling after a new password
   const [run, setRun] = useState(null); // latest run view from the API
   const [revealed, setRevealed] = useState(0);
   const [results, setResults] = useState(null);
@@ -94,6 +95,7 @@ export default function ChatApp({ lang, setLang }) {
         return new Promise((resolve) => setAskPassword(() => async (pw) => {
           setPassword(pw);
           setAskPassword(null);
+          loadHistory(); // the list needs the password too, so it is fetched again now
           resolve(await guarded(fn));
         }));
       }
@@ -161,17 +163,26 @@ export default function ChatApp({ lang, setLang }) {
     if (!conv.runId || conv.stage === "done") return undefined;
     let stop = false;
     const tick = async () => {
+      if (stop) return;
       try {
         const v = await api.run(conv.runId, lang);
         if (!stop) setRun(v);
         const a = await api.answers(conv.runId);
         if (!stop) setAnswers(a.answers);
-      } catch { /* keep polling */ }
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 401 || e.status === 423)) {
+          // The password was refused. Every further poll would count as a wrong guess for all
+          // visitors, so stop, ask again, and start polling once a password is accepted.
+          stop = true;
+          clearInterval(id);
+          guarded(() => api.run(conv.runId, lang)).then(() => setPollKey((k) => k + 1)).catch(() => {});
+        } /* any other error: keep polling */
+      }
     };
-    tick();
     const id = setInterval(tick, 1200);
+    tick();
     return () => { stop = true; clearInterval(id); };
-  }, [conv.runId, conv.stage, lang]);
+  }, [conv.runId, conv.stage, lang, pollKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A finished run is not polled, so a language switch fetches its texts once more.
   useEffect(() => {

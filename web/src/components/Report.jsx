@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { downloadFile } from "../api.js";
+import { ApiError, downloadFile } from "../api.js";
 import { t } from "../i18n.js";
 import { reportHtml } from "../sanitize.js";
 import { BrandBars } from "./Charts.jsx";
@@ -87,11 +87,26 @@ export function Downloads({ runId, names, lang }) {
     "discovered_businesses.csv": lang === "es" ? "Otros nombres (CSV)" : "Other names (CSV)",
     "questions.csv": lang === "es" ? "Preguntas usadas (CSV)" : "Questions used (CSV)",
   };
+  const [error, setError] = useState("");
+  const get = (name) => {
+    setError("");
+    downloadFile(runId, name).catch((e) => {
+      const refused = e instanceof ApiError && (e.status === 401 || e.status === 423);
+      setError(
+        refused
+          ? lang === "es" ? "La contraseña no es válida o está bloqueada. Espera un minuto y vuelve a intentarlo." : "The password is not valid or is locked. Wait a minute and try again."
+          : lang === "es" ? "No se pudo descargar el archivo." : "The file could not be downloaded.",
+      );
+    });
+  };
   return (
-    <div className="row">
-      {names.map((n) => (
-        <button key={n} type="button" className="btn" onClick={() => downloadFile(runId, n).catch(() => {})}>{label[n] || n}</button>
-      ))}
-    </div>
+    <>
+      <div className="row">
+        {names.map((n) => (
+          <button key={n} type="button" className="btn" onClick={() => get(n)}>{label[n] || n}</button>
+        ))}
+      </div>
+      {error && <p className="note" role="alert">{error}</p>}
+    </>
   );
 }

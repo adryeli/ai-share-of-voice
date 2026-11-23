@@ -22,7 +22,7 @@ test("raw script and iframe tags are gone", () => {
   assert.ok(!/<script|<iframe/i.test(html), html);
 });
 
-test("an image with a data or javascript source is neutralised", () => {
+test("an image with a javascript source is neutralised", () => {
   const html = render("![x](javascript:alert(1))");
   assert.ok(!/javascript:/i.test(html), html);
 });
