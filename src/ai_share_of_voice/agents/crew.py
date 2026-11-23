@@ -9,11 +9,17 @@ Every model turn of the agent goes through the project's ``ModelClient`` (``Mode
 the shared budget, the spending cap and the usage log see each call, and CrewAI never
 calls a provider by itself. ``BudgetExceeded`` always propagates.
 
+Each turn is one structured call (``client.complete(prompt, schema)``) whose JSON answer is
+handed back to CrewAI as the agent's final answer. So the answer never depends on CrewAI
+parsing free text, and the step costs one model call.
+
 If CrewAI is missing or the crew fails for another reason, the step falls back to one direct
 call of the same client, so a measurement never stops because of the agent runtime. The
+failure is logged, the usage of the failed attempt is added to the usage returned, and the
 returned route says which path answered, for the event log.
 """
 
+import logging
 import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
@@ -24,14 +30,21 @@ from ai_share_of_voice.agents.specs import AGENT_SPECS
 from ai_share_of_voice.exceptions import BudgetExceeded
 from ai_share_of_voice.schemas.llm import ModelClient, Usage
 
-# CrewAI sends anonymous telemetry by default; a measurement must not call anyone else.
-for _name in ("CREWAI_DISABLE_TELEMETRY", "OTEL_SDK_DISABLED"):
-    os.environ.setdefault(_name, "true")
-os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
+logger = logging.getLogger(__name__)
 
 Route = Literal["crewai", "direct"]
 DISABLE_ENV = "AISOV_CREWAI"  # set to "off" to always use the direct call
 CONTEXT_WINDOW = 131_072
+
+
+def _quiet_crewai() -> None:
+    """CrewAI sends anonymous telemetry by default; a measurement must not call anyone else.
+
+    Set only when a crew is about to run, so importing this module changes nothing.
+    """
+    for name in ("CREWAI_DISABLE_TELEMETRY", "OTEL_SDK_DISABLED"):
+        os.environ.setdefault(name, "true")
+    os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 
 def _prompt_of(messages: str | Sequence[Mapping[str, Any]]) -> str:
@@ -53,12 +66,15 @@ def _llm_class() -> type:
     from crewai import BaseLLM
 
     class ModelClientLLM(BaseLLM):
-        """A CrewAI LLM whose every turn is a call of the project's ``ModelClient``."""
+        """A CrewAI LLM whose every turn is a structured call of the project's ``ModelClient``."""
 
-        def __init__(self, client: ModelClient) -> None:
+        def __init__(
+            self, client: ModelClient, schema: type[BaseModel], usages: list[Usage]
+        ) -> None:
             super().__init__(model=str(getattr(client, "model", "model-client")), temperature=0)
             self._client = client
-            self.usages: list[Usage] = []
+            self._schema = schema
+            self.usages = usages
             # CrewAI retries a failed turn by itself; after the first failure no further call
             # may reach the provider, or a full budget or a provider error would cost more.
             self.error: Exception | None = None
@@ -77,22 +93,19 @@ def _llm_class() -> type:
             if self.error is not None:
                 raise self.error
             try:
-                return self._turn(_prompt_of(messages), response_model)
+                answer, usage = self._client.complete(
+                    _prompt_of(messages), response_model or self._schema
+                )
             except Exception as error:
                 self.error = error
                 raise
-
-        def _turn(self, prompt: str, response_model: type[BaseModel] | None) -> str:
-            if response_model is not None:
-                answer, usage = self._client.complete(prompt, response_model)
-                self.usages.append(usage)
-                return answer.model_dump_json()
-            text_answer = getattr(self._client, "answer", None)
-            if text_answer is None:
-                raise RuntimeError("this client cannot answer in free text")
-            text, usage = text_answer(prompt)
             self.usages.append(usage)
-            return text
+            body = answer.model_dump_json()
+            if response_model is not None:
+                return body  # CrewAI asked for the bare structured answer
+            # In the agent loop the same JSON is the final answer: no tool turn and no
+            # free-text parsing is needed.
+            return f"Thought: I know the answer\nFinal Answer: {body}"
 
         def supports_function_calling(self) -> bool:
             return False  # CrewAI then uses its text format and runs the tools itself
@@ -134,13 +147,16 @@ def _run_crew[T: BaseModel](
     prompt: str,
     schema: type[T],
     tools: Mapping[str, str],
-) -> tuple[T, Usage]:
+    usages: list[Usage],
+) -> T:
+    """Run the crew; every model turn it makes is appended to ``usages``, even if it fails."""
+    _quiet_crewai()
     from crewai import Crew, Process, Task
 
     from ai_share_of_voice.agents.factory import build_agent
 
     spec = AGENT_SPECS[agent_key]
-    llm = _llm_class()(client)
+    llm = _llm_class()(client, schema, usages)
     agent = build_agent(
         spec,
         llm=llm,
@@ -165,7 +181,7 @@ def _run_crew[T: BaseModel](
     answer = result.pydantic
     if not isinstance(answer, schema):
         answer = schema.model_validate_json(result.raw)
-    return answer, _total(llm.usages, llm.model)
+    return answer
 
 
 def agent_complete[T: BaseModel](
@@ -180,16 +196,23 @@ def agent_complete[T: BaseModel](
 
     ``tools`` maps the tool names of the agent's spec to the read-only text they return.
     Raises what ``client.complete`` raises when the fallback fails, and ``BudgetExceeded``
-    from either path.
+    from either path. The usage returned covers every call made, including a failed crew.
     """
+    model = str(getattr(client, "model", "model-client"))
+    spent: list[Usage] = []
     if os.environ.get(DISABLE_ENV, "").strip().lower() != "off":
         try:
-            answer, usage = _run_crew(agent_key, client, prompt, schema, tools or {})
+            answer = _run_crew(agent_key, client, prompt, schema, tools or {}, spent)
         except BudgetExceeded:
             raise
-        except Exception:  # noqa: BLE001 - any agent-runtime failure falls back to one call
-            pass
+        except Exception as error:
+            logger.warning(
+                "CrewAI agent '%s' failed (%s: %s); falling back to a direct model call",
+                agent_key,
+                type(error).__name__,
+                error,
+            )
         else:
-            return answer, usage, "crewai"
+            return answer, _total(spent, model), "crewai"
     answer, usage = client.complete(prompt, schema)
-    return answer, usage, "direct"
+    return answer, _total([*spent, usage], model), "direct"
