@@ -19,6 +19,7 @@ The server listens on this computer only.
 """
 
 import logging
+import math
 import os
 import re
 import threading
@@ -730,7 +731,7 @@ def _number(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number == number else None  # NaN is unknown too
+    return number if math.isfinite(number) else None  # NaN and infinity are unknown too
 
 
 def _compare(a: dict[str, Any] | None, b: dict[str, Any] | None) -> str:

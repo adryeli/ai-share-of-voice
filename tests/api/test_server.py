@@ -172,7 +172,16 @@ def test_the_statistics_are_computed_once_per_version_of_the_answers(tmp_path, m
 
 @pytest.mark.parametrize(
     ("cell", "expected"),
-    [("0.25", 0.25), ("", None), (None, None), ("n/a", None), ("nan", None), ("0", 0.0)],
+    [
+        ("0.25", 0.25),
+        ("", None),
+        (None, None),
+        ("n/a", None),
+        ("nan", None),
+        ("inf", None),
+        ("-inf", None),
+        ("0", 0.0),
+    ],
 )
 def test_a_csv_cell_is_a_number_or_unknown_never_an_invented_zero(cell, expected):
     from ai_share_of_voice.api.server import _number
