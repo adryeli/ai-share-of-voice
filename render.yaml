@@ -12,7 +12,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: NODE_VERSION
-        value: 20.18.0
+        value: 24.18.0
       # Where the app listens: all interfaces, on the port Render routes to.
       - key: HOST
         value: 0.0.0.0
