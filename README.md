@@ -312,6 +312,8 @@ Roles follow the [project plan](docs/PROJECT_PLAN.md); the git history shows the
 
 - [Glossary](docs/glossary.md) — product terms and interpretation of results.
 - [Decisions](docs/decisions.md) — methodology and team decisions.
+- [Architecture](docs/architecture.md) — the graph, agents, tools and data flow.
+- [Ethics](docs/ethics.md) — scope, privacy and responsible use.
 - [Project plan](docs/PROJECT_PLAN.md) — phases, owners and tasks.
 - [Local integration spec](specs/local-integration.md) — branch scope, implementation log and open items.
 - [Deploying the demo](docs/DEPLOY.md) — Render, Hugging Face Spaces and the demo password.
