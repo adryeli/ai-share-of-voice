@@ -41,6 +41,22 @@ export const api = {
   file: (id, name) => `/api/runs/${id}/files/${encodeURIComponent(name)}`,
 };
 
+// A plain link cannot send the password header, so a download is fetched and saved as a blob.
+export async function downloadFile(id, name) {
+  const headers = {};
+  const pw = getPassword();
+  if (pw) headers["X-Demo-Password"] = pw;
+  const res = await fetch(api.file(id, name), { headers });
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  const url = URL.createObjectURL(await res.blob());
+  const link = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Some browsers read the blob after the click returns: revoke it a little later.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export const pct = (v) => (v == null ? "n/a" : `${Math.round(v * 100)}%`);
 export const usd = (v) => `${(v ?? 0).toFixed(2).replace(".", ",")} $`;
 export function duration(seconds, lang) {

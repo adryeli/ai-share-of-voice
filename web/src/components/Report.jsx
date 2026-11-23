@@ -1,10 +1,8 @@
-import { marked } from "marked";
 import { useMemo, useRef, useState } from "react";
-import { api } from "../api.js";
+import { ApiError, downloadFile } from "../api.js";
 import { t } from "../i18n.js";
+import { reportHtml } from "../sanitize.js";
 import { BrandBars } from "./Charts.jsx";
-
-marked.setOptions({ gfm: true, breaks: false });
 
 // Split the report's Markdown into A4 pages: the title and summary first (with the chart), then
 // roughly two sections per page. Pure layout; the text is the writer's, untouched.
@@ -27,10 +25,6 @@ function paginate(md) {
   if (current.trim()) pages.push(current);
   return pages;
 }
-
-const safeHtml = (md) =>
-  // The report text can quote model answers and web pages: drop any raw HTML before rendering.
-  marked.parse(md.replace(/<[^>]*>/g, ""));
 
 export function ReportViewer({ markdown, results, draft, lang }) {
   const hasChart = results?.brands?.length > 0;
@@ -62,7 +56,7 @@ export function ReportViewer({ markdown, results, draft, lang }) {
               <span>{results?.date}</span>
             </div>
             <div className="content">
-              {p !== null && <div dangerouslySetInnerHTML={{ __html: safeHtml(p) }} />}
+              {p !== null && <div dangerouslySetInnerHTML={{ __html: reportHtml(p) }} />}
               {p === null && (
                 <figure style={{ margin: 0 }}>
                   <h2>{es ? "Te nombra frente a te recomienda" : "Mentions vs recommends"}</h2>
@@ -93,11 +87,26 @@ export function Downloads({ runId, names, lang }) {
     "discovered_businesses.csv": lang === "es" ? "Otros nombres (CSV)" : "Other names (CSV)",
     "questions.csv": lang === "es" ? "Preguntas usadas (CSV)" : "Questions used (CSV)",
   };
+  const [error, setError] = useState("");
+  const get = (name) => {
+    setError("");
+    downloadFile(runId, name).catch((e) => {
+      const refused = e instanceof ApiError && (e.status === 401 || e.status === 423);
+      setError(
+        refused
+          ? lang === "es" ? "La contraseña no es válida o está bloqueada. Espera un minuto y vuelve a intentarlo." : "The password is not valid or is locked. Wait a minute and try again."
+          : lang === "es" ? "No se pudo descargar el archivo." : "The file could not be downloaded.",
+      );
+    });
+  };
   return (
-    <div className="row">
-      {names.map((n) => (
-        <a key={n} className="btn" href={api.file(runId, n)} download>{label[n] || n}</a>
-      ))}
-    </div>
+    <>
+      <div className="row">
+        {names.map((n) => (
+          <button key={n} type="button" className="btn" onClick={() => get(n)}>{label[n] || n}</button>
+        ))}
+      </div>
+      {error && <p className="note" role="alert">{error}</p>}
+    </>
   );
 }

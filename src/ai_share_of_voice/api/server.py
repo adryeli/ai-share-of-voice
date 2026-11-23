@@ -6,8 +6,10 @@ exactly those of the Gradio app; this module only translates them for the browse
 
 Rules kept here (team review of the redesign):
 
-* Every endpoint that can call a model asks for the demo password (``ui/access.AccessGate``,
-  header ``X-Demo-Password``) in live mode, and every call goes through the budgeted clients.
+* Every endpoint that can call a model, and every one that shows or changes a measurement (list,
+  view, decision, results, answers, chat, downloads), asks for the demo password
+  (``ui/access.AccessGate``, header ``X-Demo-Password``) in live mode. Only ``/api/meta`` and
+  ``/api/access`` stay open. Every call goes through the budgeted clients.
 * Figures shown or said in the chat come from the statistics, never from free model text.
   Intervals are the per-question (cluster) intervals of ``stats/``; the funnel shows the
   stopping rule's own reason.
@@ -16,11 +18,14 @@ Rules kept here (team review of the redesign):
 The server listens on this computer only.
 """
 
+import logging
+import math
 import os
 import re
 import threading
 import time
 from collections import defaultdict, deque
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -38,13 +43,20 @@ from ai_share_of_voice.panel import check_user_panel, read_panel_file
 from ai_share_of_voice.schemas.analysis import RawAnswer
 from ai_share_of_voice.schemas.brief import BrandSpec, Brief
 from ai_share_of_voice.schemas.stopping import StopConfig
-from ai_share_of_voice.tools.stats_tool import StatsToolError, StatsToolInput, run_stats
+from ai_share_of_voice.tools.stats_tool import (
+    ANSWERS_FILE_NAME,
+    StatsToolError,
+    StatsToolInput,
+    run_stats,
+)
 from ai_share_of_voice.ui import catalog
 from ai_share_of_voice.ui.access import Access, AccessGate, gate_from_env
 from ai_share_of_voice.ui.demo_responders import demo_responders
 from ai_share_of_voice.ui.run_controller import BriefForm, RunController
 from ai_share_of_voice.voice import event_line, headline, objections_intro, overlaps, stage_line
 from ai_share_of_voice.writing import CLIENT_REPORT_FILE_NAME
+
+logger = logging.getLogger(__name__)
 
 DOWNLOADS = {
     "client_report.md": "text/markdown; charset=utf-8",
@@ -228,6 +240,10 @@ def create_app(
         """
         if not gate.enabled:
             return
+        if not password:
+            # No attempt at all is not a wrong guess: a page polling without a password must
+            # not lock the gate for the people who have it.
+            raise HTTPException(401, "demo password required")
         result = gate.check(password)
         if result is Access.LOCKED:
             raise HTTPException(423, "locked: too many wrong passwords, wait a minute")
@@ -266,6 +282,7 @@ def create_app(
         try:
             return dict(run.graph.get_state(run.config).values)
         except Exception:
+            logger.warning("could not read the live state of %s", run_id, exc_info=True)
             return {}
 
     # --- meta -------------------------------------------------------------------------------
@@ -367,7 +384,8 @@ def create_app(
         return {"run_id": run_id}
 
     @app.get("/api/runs")
-    def history() -> list[dict[str, Any]]:
+    def history(x_demo_password: str | None = Header(default=None)) -> list[dict[str, Any]]:
+        require_access(x_demo_password)
         return [
             {
                 "run_id": item.run_id,
@@ -386,7 +404,12 @@ def create_app(
         ]
 
     @app.get("/api/runs/{run_id}")
-    def run_view(run_id: str, lang: Literal["es", "en"] | None = None) -> dict[str, Any]:
+    def run_view(
+        run_id: str,
+        lang: Literal["es", "en"] | None = None,
+        x_demo_password: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_access(x_demo_password)
         ensure_run(run_id)
         lang = lang or langs.get(run_id, "es")
         view = controller.view(run_id)
@@ -463,7 +486,10 @@ def create_app(
         }
 
     @app.post("/api/runs/{run_id}/decision")
-    def decide(run_id: str, request: DecisionRequest) -> dict[str, str]:
+    def decide(
+        run_id: str, request: DecisionRequest, x_demo_password: str | None = Header(default=None)
+    ) -> dict[str, str]:
+        require_access(x_demo_password)
         ensure_run(run_id)
         try:
             controller.decide(run_id, approved=request.approved, comment=request.comment)
@@ -482,24 +508,36 @@ def create_app(
         return data
 
     @app.get("/api/runs/{run_id}/results")
-    def results(run_id: str, lang: Literal["es", "en"] = "es") -> dict[str, Any]:
+    def results(
+        run_id: str,
+        lang: Literal["es", "en"] = "es",
+        x_demo_password: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_access(x_demo_password)
         ensure_run(run_id)
         return facts(run_id, lang)
 
     @app.get("/api/runs/{run_id}/answers")
-    def answers(run_id: str) -> dict[str, Any]:
+    def answers(run_id: str, x_demo_password: str | None = Header(default=None)) -> dict[str, Any]:
+        require_access(x_demo_password)
         ensure_run(run_id)
         return {"answers": _answers(runs_dir / run_id)}
 
     @app.post("/api/runs/{run_id}/ask")
-    def ask(run_id: str, request: AskRequest) -> dict[str, str]:
+    def ask(
+        run_id: str, request: AskRequest, x_demo_password: str | None = Header(default=None)
+    ) -> dict[str, str]:
         """Answers built from the computed figures only: no model call, nothing invented."""
+        require_access(x_demo_password)
         ensure_run(run_id)
         data = facts(run_id, request.lang)
         return {"reply": concierge.answer_question(request.question, data, request.lang)}
 
     @app.get("/api/runs/{run_id}/files/{name}")
-    def download(run_id: str, name: str) -> FileResponse:
+    def download(
+        run_id: str, name: str, x_demo_password: str | None = Header(default=None)
+    ) -> FileResponse:
+        require_access(x_demo_password)
         _check_run_id(run_id)
         run_dir = (runs_dir / run_id).resolve()
         if name in DOWNLOADS:
@@ -527,19 +565,42 @@ def _sector_key(text: str) -> str:
 
 
 def _metric(runs_dir: Path, run_id: str, metric: str) -> tuple[dict[str, dict[str, Any]], int]:
+    """The per-brand figures of one metric, computed once per version of the answers file.
+
+    The bootstrap behind the intervals is not free and the results and chat endpoints are hit
+    on every poll, so the answer is remembered until the analysed answers change (a new round).
+    """
+    try:
+        stat = (Path(runs_dir) / run_id / ANSWERS_FILE_NAME).stat()
+    except OSError:
+        return {}, 0
+    rows, n_questions = _compute_metric(
+        str(runs_dir), run_id, metric, stat.st_mtime_ns, stat.st_size
+    )
+    return {brand: dict(row) for brand, row in rows}, n_questions
+
+
+@lru_cache(maxsize=64)
+def _compute_metric(
+    runs_dir: str, run_id: str, metric: str, _mtime_ns: int, _size: int
+) -> tuple[tuple[tuple[str, tuple[tuple[str, Any], ...]], ...], int]:
+    """Cached on the file's version (the last two arguments only key the cache)."""
     try:
         result = run_stats(StatsToolInput(run_id=run_id, metric=metric, chart=False), runs_dir)
     except StatsToolError:
-        return {}, 0
-    rows = {
-        row.brand: {
-            "estimate": row.estimate,
-            "ci_low": row.ci_low,
-            "ci_high": row.ci_high,
-            "method": row.ci_method,
-        }
+        return (), 0
+    rows = tuple(
+        (
+            row.brand,
+            (
+                ("estimate", row.estimate),
+                ("ci_low", row.ci_low),
+                ("ci_high", row.ci_high),
+                ("method", row.ci_method),
+            ),
+        )
         for row in result.rows
-    }
+    )
     return rows, result.n_questions
 
 
@@ -605,11 +666,11 @@ def _facts(controller: RunController, runs_dir: Path, run_id: str, lang: str) ->
             {
                 "name": row.get("name"),
                 "kind": row.get("kind"),
-                "rate": float(row.get("rate") or 0),
-                "ci_low": float(row.get("ci_low") or 0),
-                "ci_high": float(row.get("ci_high") or 0),
-                "n_questions_with": int(row.get("n_questions_with") or 0),
-                "suggested": row.get("suggested") == "True",
+                "rate": _number(row.get("rate")),
+                "ci_low": _number(row.get("ci_low")),
+                "ci_high": _number(row.get("ci_high")),
+                "n_questions_with": int(_number(row.get("n_questions_with")) or 0),
+                "suggested": str(row.get("suggested", "")).strip().lower() in ("true", "1", "yes"),
                 # Only what a read source supports: found with a URL, or "not checked".
                 "found_online": bool(check.get("found_online")) and bool(check.get("evidence_url")),
                 "evidence_url": check.get("evidence_url"),
@@ -662,6 +723,15 @@ def _facts(controller: RunController, runs_dir: Path, run_id: str, lang: str) ->
             for item in controller.trend(run_id)
         ],
     }
+
+
+def _number(value: Any) -> float | None:
+    """A CSV cell as a number; empty or unreadable is None (unknown), never a made-up 0."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None  # NaN and infinity are unknown too
 
 
 def _compare(a: dict[str, Any] | None, b: dict[str, Any] | None) -> str:
