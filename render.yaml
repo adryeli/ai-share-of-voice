@@ -5,17 +5,17 @@ services:
     name: ai-share-of-voice
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    buildCommand: pip install -r requirements.txt && cd web && npm ci && npm run build
+    startCommand: python serve.py
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
+      - key: NODE_VERSION
+        value: 20.18.0
       # Where the app listens: all interfaces, on the port Render routes to.
-      - key: GRADIO_SERVER_NAME
+      - key: HOST
         value: 0.0.0.0
-      - key: GRADIO_SERVER_PORT
-        value: "10000"
       - key: PORT
         value: "10000"
       # simulated = free demo, no password. Change to live in the dashboard for real calls.

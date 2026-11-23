@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
-HOST = "127.0.0.1"
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
 
@@ -40,9 +40,10 @@ def main() -> None:
         sources_factory=lambda: open_stdio_sources(server_env),
     )
     app = create_app(settings, controller, static_dir=ROOT / "web" / "dist")
+    host = os.environ.get("HOST", DEFAULT_HOST)
     port = int(os.environ.get("PORT", DEFAULT_PORT))
-    print(f"AI Share of Voice (chat): http://{HOST}:{port}  mode={settings.mode.value}")
-    uvicorn.run(app, host=HOST, port=port, log_level="warning")
+    print(f"AI Share of Voice (chat): http://{host}:{port}  mode={settings.mode.value}")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":
