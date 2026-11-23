@@ -314,5 +314,5 @@ Roles follow the [project plan](docs/PROJECT_PLAN.md); the git history shows the
 - [Decisions](docs/decisions.md) — methodology and team decisions.
 - [Project plan](docs/PROJECT_PLAN.md) — phases, owners and tasks.
 - [Local integration spec](specs/local-integration.md) — branch scope, implementation log and open items.
-- [Deploying the demo](docs/DEPLOY.md) — Hugging Face Spaces and the demo password.
+- [Deploying the demo](docs/DEPLOY.md) — Render, Hugging Face Spaces and the demo password.
 - [Contributing](docs/CONTRIBUTING.md) — workflow, review rules and local hooks.
