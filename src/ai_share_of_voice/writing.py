@@ -26,6 +26,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ai_share_of_voice.agents.crew import agent_complete
 from ai_share_of_voice.agents.skeptic import (
     MAX_OBJECTIONS,
     SkepticReview,
@@ -394,6 +395,11 @@ def _event(state: GraphState, node: str, agent: str, status: EventStatus, **fiel
     )
 
 
+def _by(route: str) -> str:
+    """Which runtime answered, for the event log."""
+    return {"crewai": " (CrewAI agent)", "direct": " (direct model call)"}.get(route, "")
+
+
 def make_writer_node(event_log: EventLog, client: ModelClient, runs_dir: Path) -> NodeFn:
     def write_draft(state: GraphState) -> dict[str, Any]:
         events = [_event(state, "write_draft", "writer", EventStatus.STARTED)]
@@ -406,9 +412,15 @@ def make_writer_node(event_log: EventLog, client: ModelClient, runs_dir: Path) -
         template = template_draft(facts)
         record = facts_record(facts, state)
         prompt = writer_prompt(template, facts.language, state.get("draft", ""), objections)
-        draft, how, cost = template, "code template", 0.0
+        draft, how, cost, route = template, "code template", 0.0, ""
         try:
-            rewrite, usage = client.complete(prompt, DraftReport)
+            rewrite, usage, route = agent_complete(
+                "writer",
+                client,
+                prompt,
+                DraftReport,
+                tools={"report_template": template, "read_results": record.model_dump_json()},
+            )
             cost = usage.cost_usd
         except (ValueError, ToolFailure):
             how = "code template (model rewrite unavailable)"
@@ -427,7 +439,7 @@ def make_writer_node(event_log: EventLog, client: ModelClient, runs_dir: Path) -
             "write_draft",
             "writer",
             EventStatus.SUCCEEDED,
-            result=f"draft v{version}: {how}",
+            result=f"draft v{version}: {how}{_by(route)}",
             spend=spend,
         )
         event_log.append(done)
@@ -489,15 +501,22 @@ def make_checked_skeptic_node(
             record = record_from_state(state)  # not enough data: the headline record only
 
         found = run_checks(draft, record)
-        from_code, from_model, cost, skipped = len(found), 0, 0.0, False
+        from_code, from_model, cost, skipped, reviewer = len(found), 0, 0.0, False, ""
         if client is not None and draft.strip():
             try:
                 prompt = _with_run_facts(build_skeptic_prompt(draft, record), state)
-                review, usage = client.complete(prompt, SkepticReview)
+                review, usage, route = agent_complete(
+                    "skeptic",
+                    client,
+                    prompt,
+                    SkepticReview,
+                    tools={"read_results": record.model_dump_json()},
+                )
             except ValueError:
                 skipped = True  # an invalid answer must not discard the code findings
             else:
                 cost = usage.cost_usd
+                reviewer = _by(route)
                 raised, _dropped = accept_model_objections(review, draft)
                 known = {(item.kind, item.claim) for item in found}
                 extra = [item for item in raised if (item.kind, item.claim) not in known]
@@ -507,6 +526,7 @@ def make_checked_skeptic_node(
         kept = found[:max_objections]
         spend = state.get("spend_usd", 0.0) + cost
         result = f"{len(kept)} objections kept ({from_code} from code, {from_model} from the model)"
+        result += reviewer
         if skipped:
             result += "; model review skipped: invalid answer"
         if kept:  # what was objected, for the audit trail (the full list goes to the state)
