@@ -92,3 +92,44 @@ def test_model_calls_need_the_password_when_the_gate_is_on(tmp_path, monkeypatch
     assert gated.post("/api/runs", json={"brief": BRIEF}).status_code in (401, 423)
     ok = gated.post("/api/access", headers={"X-Demo-Password": "s3cret"})
     assert ok.status_code == 200
+
+
+@pytest.fixture
+def gated(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLM_MODE", "simulated")
+    monkeypatch.setenv("SEARCH_PROVIDER", "none")
+    settings = load_settings()
+    controller = RunController(settings, runs_dir=tmp_path, data_dir=Path("data"))
+    return TestClient(create_app(settings, controller, gate=AccessGate("s3cret")))
+
+
+def test_measurements_need_the_password_when_the_gate_is_on(gated):
+    password = {"X-Demo-Password": "s3cret"}
+    questions = gated.post("/api/brief/questions", json=BRIEF).json()["questions"]
+    run_id = gated.post(
+        "/api/runs", json={"brief": BRIEF, "questions": questions}, headers=password
+    ).json()["run_id"]
+    base = f"/api/runs/{run_id}"
+    guarded = [
+        ("get", "/api/runs", None),
+        ("get", base, None),
+        ("get", f"{base}/results", None),
+        ("get", f"{base}/answers", None),
+        ("get", f"{base}/files/client_report.md", None),
+        ("post", f"{base}/ask", {"question": "why did you stop?"}),
+        ("post", f"{base}/decision", {"approved": True}),
+    ]
+    for method, path, body in guarded:
+        assert gated.request(method, path, json=body).status_code == 401, path
+    wrong = gated.get(base, headers={"X-Demo-Password": "nope"})
+    assert wrong.status_code == 401  # one wrong guess: refused, the gate is not locked yet
+    # The open endpoints the page needs before it has the password.
+    assert gated.get("/api/meta").json()["password_required"] is True
+    assert gated.get(base, headers=password).status_code in (200, 409)
+
+
+def test_asking_without_a_password_does_not_lock_the_gate(gated):
+    for _ in range(20):
+        assert gated.get("/api/runs").status_code == 401
+    ok = gated.post("/api/access", headers={"X-Demo-Password": "s3cret"})
+    assert ok.status_code == 200

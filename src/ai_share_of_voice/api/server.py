@@ -6,8 +6,10 @@ exactly those of the Gradio app; this module only translates them for the browse
 
 Rules kept here (team review of the redesign):
 
-* Every endpoint that can call a model asks for the demo password (``ui/access.AccessGate``,
-  header ``X-Demo-Password``) in live mode, and every call goes through the budgeted clients.
+* Every endpoint that can call a model, and every one that shows or changes a measurement (list,
+  view, decision, results, answers, chat, downloads), asks for the demo password
+  (``ui/access.AccessGate``, header ``X-Demo-Password``) in live mode. Only ``/api/meta`` and
+  ``/api/access`` stay open. Every call goes through the budgeted clients.
 * Figures shown or said in the chat come from the statistics, never from free model text.
   Intervals are the per-question (cluster) intervals of ``stats/``; the funnel shows the
   stopping rule's own reason.
@@ -228,6 +230,10 @@ def create_app(
         """
         if not gate.enabled:
             return
+        if not password:
+            # No attempt at all is not a wrong guess: a page polling without a password must
+            # not lock the gate for the people who have it.
+            raise HTTPException(401, "demo password required")
         result = gate.check(password)
         if result is Access.LOCKED:
             raise HTTPException(423, "locked: too many wrong passwords, wait a minute")
@@ -367,7 +373,8 @@ def create_app(
         return {"run_id": run_id}
 
     @app.get("/api/runs")
-    def history() -> list[dict[str, Any]]:
+    def history(x_demo_password: str | None = Header(default=None)) -> list[dict[str, Any]]:
+        require_access(x_demo_password)
         return [
             {
                 "run_id": item.run_id,
@@ -386,7 +393,12 @@ def create_app(
         ]
 
     @app.get("/api/runs/{run_id}")
-    def run_view(run_id: str, lang: Literal["es", "en"] | None = None) -> dict[str, Any]:
+    def run_view(
+        run_id: str,
+        lang: Literal["es", "en"] | None = None,
+        x_demo_password: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_access(x_demo_password)
         ensure_run(run_id)
         lang = lang or langs.get(run_id, "es")
         view = controller.view(run_id)
@@ -463,7 +475,10 @@ def create_app(
         }
 
     @app.post("/api/runs/{run_id}/decision")
-    def decide(run_id: str, request: DecisionRequest) -> dict[str, str]:
+    def decide(
+        run_id: str, request: DecisionRequest, x_demo_password: str | None = Header(default=None)
+    ) -> dict[str, str]:
+        require_access(x_demo_password)
         ensure_run(run_id)
         try:
             controller.decide(run_id, approved=request.approved, comment=request.comment)
@@ -482,24 +497,36 @@ def create_app(
         return data
 
     @app.get("/api/runs/{run_id}/results")
-    def results(run_id: str, lang: Literal["es", "en"] = "es") -> dict[str, Any]:
+    def results(
+        run_id: str,
+        lang: Literal["es", "en"] = "es",
+        x_demo_password: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_access(x_demo_password)
         ensure_run(run_id)
         return facts(run_id, lang)
 
     @app.get("/api/runs/{run_id}/answers")
-    def answers(run_id: str) -> dict[str, Any]:
+    def answers(run_id: str, x_demo_password: str | None = Header(default=None)) -> dict[str, Any]:
+        require_access(x_demo_password)
         ensure_run(run_id)
         return {"answers": _answers(runs_dir / run_id)}
 
     @app.post("/api/runs/{run_id}/ask")
-    def ask(run_id: str, request: AskRequest) -> dict[str, str]:
+    def ask(
+        run_id: str, request: AskRequest, x_demo_password: str | None = Header(default=None)
+    ) -> dict[str, str]:
         """Answers built from the computed figures only: no model call, nothing invented."""
+        require_access(x_demo_password)
         ensure_run(run_id)
         data = facts(run_id, request.lang)
         return {"reply": concierge.answer_question(request.question, data, request.lang)}
 
     @app.get("/api/runs/{run_id}/files/{name}")
-    def download(run_id: str, name: str) -> FileResponse:
+    def download(
+        run_id: str, name: str, x_demo_password: str | None = Header(default=None)
+    ) -> FileResponse:
+        require_access(x_demo_password)
         _check_run_id(run_id)
         run_dir = (runs_dir / run_id).resolve()
         if name in DOWNLOADS:

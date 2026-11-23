@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { api } from "../api.js";
+import { downloadFile } from "../api.js";
 import { t } from "../i18n.js";
 import { reportHtml } from "../sanitize.js";
 import { BrandBars } from "./Charts.jsx";
@@ -90,7 +90,7 @@ export function Downloads({ runId, names, lang }) {
   return (
     <div className="row">
       {names.map((n) => (
-        <a key={n} className="btn" href={api.file(runId, n)} download>{label[n] || n}</a>
+        <button key={n} type="button" className="btn" onClick={() => downloadFile(runId, n).catch(() => {})}>{label[n] || n}</button>
       ))}
     </div>
   );
