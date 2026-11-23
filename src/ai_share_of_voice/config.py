@@ -51,7 +51,9 @@ DEFAULT_MODELS = {
     Provider.GEMINI: {
         "subject": "gemini-3.8-flash",
         "agent": "gemini-3.8-flash",
-        "vision": "gemini-3.8-flash",
+        # Flash-Lite for vision: on 2026-11-23 a live check with a real chart timed out on
+        # 3.8 Flash and got 503 (high demand) on 3.6 Flash; 3.5 Flash-Lite answered, cheapest.
+        "vision": "gemini-3.5-flash-lite",
     },
 }
 
