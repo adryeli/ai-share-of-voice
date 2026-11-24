@@ -3,6 +3,7 @@ import { api, pct, duration } from "../api.js";
 import { t } from "../i18n.js";
 import { Highlighted } from "./Answers.jsx";
 import { CountUp, useReveal, useTypewriter } from "../motion.jsx";
+import { MethodSection, TeamSection } from "./LandingSections.jsx";
 
 // Example answers for the card while there is no approved measurement. Tagged "Ejemplo".
 // Each part is [text, kind]: kind "named" or "rec" gets a marker that sweeps in after the text.
@@ -24,6 +25,34 @@ const EXAMPLE_ANSWERS = {
       parts: [["“It depends on the area. In the centre, ", null], ["Uber Eats is usually quicker", "rec"], [". ", null], ["Glovo", "named"], [" has more choice.”", null]] },
   ],
 };
+
+// Why it matters, from a published survey. Figures copied from the source, never rounded or
+// made up; the source is linked on the page.
+const TRUST_SOURCE = "https://assets.kpmg.com/content/dam/kpmgsites/xx/pdf/2025/05/trust-attitudes-and-use-of-ai-spain-snapshot.pdf.coredownload.inline.pdf";
+
+function TrustStat({ lang }) {
+  const es = lang === "es";
+  return (
+    <aside className="trust enter" style={{ "--d": "0.16s" }} aria-label={es ? "Dato sobre la confianza en la IA" : "A figure on trust in AI"}>
+      <div className="trust-figs">
+        <div><span className="trust-n"><CountUp value={51} />%</span><span>{es ? "de la gente en España está dispuesta a confiar en la IA" : "of people in Spain are willing to trust AI"}</span></div>
+        <div><span className="trust-n"><CountUp value={72} duration={1300} />%</span><span>{es ? "acepta o aprueba la IA" : "accept or approve of AI"}</span></div>
+      </div>
+      <p className="trust-why">
+        {es
+          ? "Si la mitad de la gente está dispuesta a fiarse de la IA, lo que la IA diga de tu negocio cuenta. Por eso lo medimos."
+          : "If half of people are willing to trust AI, what AI says about your business matters. That's why we measure it."}
+      {" "}
+<a className="trust-src" href={TRUST_SOURCE} target="_blank" rel="noreferrer noopener"
+          title="KPMG y Universidad de Melbourne, «Trust, attitudes and use of AI», Spain insights (2025)"
+          aria-label={es ? "Fuente: KPMG y Universidad de Melbourne, Spain insights 2025" : "Source: KPMG and University of Melbourne, Spain insights 2025"}>
+          {es ? "Fuente" : "Source"} ↗
+        </a>
+      </p>
+
+    </aside>
+  );
+}
 
 // The card asks its question again and again, the way the product does.
 function AnswerCard({ lang, answer, simulatedRun }) {
@@ -93,8 +122,9 @@ export default function Landing({ lang, setLang, go }) {
 
   // A run made with the simulated AI is still an example: only live runs count as real answers.
   const simulatedRun = real && real.model === "simulated";
-  const data = real || EXAMPLE;
+  // A demo-mode run is still an example: the page then tells the example's one story (Madrid).
   const isExample = !real || simulatedRun;
+  const data = isExample ? EXAMPLE : real;
   const plans = meta?.plans;
   const es = lang === "es";
   const revealRef = useReveal([lang, real]);
@@ -113,20 +143,21 @@ export default function Landing({ lang, setLang, go }) {
               <button className={lang === "en" ? "on" : ""} style={{ color: lang === "en" ? undefined : "var(--muted)" }} onClick={() => setLang("en")}>EN</button>
             </span>
           </nav>
-          <a className="btn" href="#/app">{es ? "Abrir la app" : "Open the app"}</a>
+          <a className="btn btn-cta" href="#/app">{es ? "Abrir la app" : "Open the app"} <span aria-hidden="true">→</span></a>
         </div>
       </header>
 
       <div className="wrap">
         <div className="dateline enter" style={{ "--d": "0s" }}>
-          <span>{es ? "Informe de campo" : "Field report"} {isExample && <span className="tag-example">{t(lang, "exampleTag")}</span>}</span>
-          <span>{data.city} · {real ? real.date : "—"}</span>
+          <span>{es ? "Informe de campo" : "Field report"}</span>
+          <span>{data.city}{!isExample && real.date ? ` · ${real.date}` : ""}</span>
           <span>{data.n_answers} {t(lang, "answers")} · {data.n_questions} {es ? "preguntas" : "questions"} · {es ? "1 modelo" : "1 model"}</span>
         </div>
 
         <section className="hero">
           <div className="copy">
-            <h1 className="enter" style={{ "--d": "0.08s" }}>{es ? <>Le preguntamos a la IA por tu negocio. <em>Una y otra vez.</em></> : <>We ask the AI about your business. <em>Again and again.</em></>}</h1>
+            <h1 className="enter" style={{ "--d": "0.08s" }}>{es ? <>¿La IA menciona o <em>recomienda</em> tu negocio?</> : <>Does the AI mention or <em>recommend</em> your business?</>}</h1>
+            <TrustStat lang={lang} />
             <p className="lead enter" style={{ "--d": "0.2s" }}>
               {es
                 ? "Tus clientes ya no buscan: preguntan. Hacemos esas mismas preguntas 10, 30 o 100 veces, contamos quién sale y quién se recomienda, y te decimos con honestidad cuánto puedes fiarte del resultado."
@@ -157,10 +188,7 @@ export default function Landing({ lang, setLang, go }) {
             <p className="serif" style={{ fontSize: 30, lineHeight: 1.2, fontStyle: "italic", color: "#f4efe6", margin: 0 }}>
               {es ? "«Salir no es lo mismo que ser elegido.»" : "“Showing up is not the same as being picked.”"}
             </p>
-            <p style={{ fontSize: 13 }}>
-              {isExample ? <span className="tag-example" style={{ color: "#cfc7ba", borderColor: "#cfc7ba" }}>{t(lang, "exampleTag")}</span> : null}{" "}
-              {t(lang, "sample")}
-            </p>
+
           </div>
         </div>
       </section>
@@ -186,19 +214,17 @@ export default function Landing({ lang, setLang, go }) {
                 <div className="n"><CountUp value={plans ? plans[k].answers : { quick: 10, standard: 30, deep: 100 }[k]} duration={900} /></div>
                 <div>{t(lang, "answers")}{plans ? ` · ${plans[k].questions} ${es ? "preguntas" : "questions"} × ${plans[k].rounds} ${es ? "rondas" : "rounds"}` : ""}</div>
                 <div className="muted" style={{ fontSize: 14 }}>
-                  {plans ? (meta.mode === "live" ? `${duration(plans[k].seconds, lang)} ${es ? "(medido: ~25 s por respuesta)" : "(measured: ~25 s per answer)"}` : (es ? "en modo demostración, unos segundos" : "in demo mode, a few seconds")) : ""}
+                  {plans && meta.mode === "live" ? `${duration(plans[k].seconds, lang)} ${es ? "(medido: ~25 s por respuesta)" : "(measured: ~25 s per answer)"}` : ""}
                 </div>
               </div>
             ))}
           </div>
-          <div className="example-box" style={{ marginTop: 24, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <span>{t(lang, "exampleView")}</span>
-            <span className="tag-example">{es ? "Vídeo de la demo · Próximamente" : "Demo video · Coming soon"}</span>
-          </div>
         </div>
       </section>
 
-      <section id="metodo" style={{ borderTop: "1px solid var(--ink)" }}>
+      <MethodSection lang={lang} rules={meta?.stop_rules} />
+
+      <section id="limites" style={{ borderTop: "1px solid var(--ink)" }}>
         <div className="wrap" style={{ display: "flex", flexWrap: "wrap", gap: 48, padding: "72px 32px" }}>
           <h2 data-reveal className="serif" style={{ flex: "1 1 320px", margin: 0, fontSize: 44, lineHeight: 1.05 }}>{es ? <>Lo que <em>no</em> te vamos a decir.</> : <>What we <em>won't</em> tell you.</>}</h2>
           <ul className="nots" style={{ flex: "999 1 520px" }}>
@@ -210,10 +236,12 @@ export default function Landing({ lang, setLang, go }) {
         </div>
       </section>
 
-      <footer className="l-foot" id="equipo">
+      <TeamSection lang={lang} go={go} />
+
+      <footer className="l-foot">
         <div className="wrap">
-          <p className="serif" style={{ margin: 0, fontSize: 26 }}>{es ? "Hecho en Madrid por Anas, Javier, Eli y Abdhur." : "Made in Madrid by Anas, Javier, Eli and Abdhur."}</p>
-          <button className="btn btn-rust" onClick={() => go("#/app")}>{es ? "Haz tu primera medición" : "Run your first measurement"}</button>
+          <p className="serif" style={{ margin: 0, fontSize: 22 }}>{es ? "Hecho en Madrid por Anas, Javier, Eli y Abdur." : "Made in Madrid by Anas, Javier, Eli and Abdur."}</p>
+          <span className="mono muted" style={{ fontSize: 12 }}>{t(lang, "sample")}</span>
         </div>
       </footer>
     </div>
